@@ -37,7 +37,46 @@ so unresolved original obligations are not erased by an archive flag.
 
 It deliberately does **not** make GitHub canonical, infer authority from repository names, or call an LLM on the happy path.
 
-## Executable receiving edge
+## Native work receiving
+
+`./native-work-receiving` exports `receiveGitHubWork({ event, opening, binding,
+call })`. Supply the actual provider event, an explicitly interpreted native
+opening, a verified repository-ID/public-visibility/receiving-enterprise/section binding, and the
+authenticated installed operation port `call(verb, input)`. Native work law
+validates authority, requirements, proposal relationships and actor selection.
+The source's prose never selects its office or receiving authority.
+
+The board retains both the original GitHub locator and a self-contained JSON
+source document as a `data:` document locator. Its NI commitment protects the
+exact snapshot; `readGitHubSourceDocument(source)` recovers and verifies it,
+including original author, provider identity, revision, material and form type.
+Source documents are bounded to 256 KiB. Larger documents are refused.
+
+Receiving uses the board's existing source selection and full thread readback.
+Identical replay reads the existing native record without a new opening or a
+separate receipt database. A receipt requires the exact source document to be
+present and reports `NATIVE_RECEIVED_UNROUTED` if the board's derived home does
+not match the selected receiver. Receipt stages distinguish native admission,
+routing, allocation, implementation and acceptance. Receiving alone proves
+neither staffing nor customer acceptance.
+
+This route currently accepts verified **public** repository material only.
+Private or unknown visibility is refused because the installed public board
+does not establish a private receiving audience. Source interpretation is
+explicit: a complaint, idea or question is not silently made an executable
+requirement. No generic daemon, directory-name routing rule, or automatic
+GitHub comment is introduced.
+
+The public intake delivery PR (`561-group/561-group-site#3`) was received on
+Cold Red Gate at native thread
+`ni:///sha-256;mcpdsKVCR1jsDgOIs9i_JSCmM71P3-PNX7FgFIPgi20`, with its full
+provider source document, original author and `group-operations` home. The
+installed port queued the peer handoff. Read-only replay returned that same
+thread using two board reads and no opening. The authenticated relay was the
+existing Chief Information Officer office; this is not evidence of this Codex
+session's CTO incumbency, peer receipt, actuator execution or customer acceptance.
+
+## Raw HTTP arrival receiving
 
 `settle-github-event` reads one GitHub event JSON object on stdin and:
 
