@@ -1,5 +1,6 @@
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 function readStore(path) {
   try {
@@ -14,6 +15,19 @@ function readStore(path) {
   }
 }
 
+function readJsonOrNull(path) {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new TypeError("settlement claim must contain one JSON object");
+    }
+    return parsed;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 function withLock(lockPath, action) {
   mkdirSync(lockPath);
   try {
@@ -23,6 +37,10 @@ function withLock(lockPath, action) {
   }
 }
 
+function claimName(eventKey) {
+  return `${createHash("sha256").update(eventKey, "utf8").digest("hex")}.json`;
+}
+
 export class FileReceiptStore {
   constructor(path) {
     if (typeof path !== "string" || path.trim() === "") {
@@ -30,6 +48,7 @@ export class FileReceiptStore {
     }
     this.path = resolve(path);
     this.lockPath = `${this.path}.lock`;
+    this.claimDirectory = `${this.path}.claims`;
   }
 
   get(eventKey) {
@@ -60,5 +79,63 @@ export class FileReceiptStore {
       renameSync(temporary, this.path);
       return receipt;
     });
+  }
+
+  claim(eventKey) {
+    if (typeof eventKey !== "string" || eventKey === "") {
+      throw new TypeError("eventKey is required");
+    }
+
+    mkdirSync(this.claimDirectory, { recursive: true });
+    const claimPath = join(this.claimDirectory, claimName(eventKey));
+    const claim = Object.freeze({
+      claimId: randomUUID(),
+      eventKey,
+      claimedAt: new Date().toISOString(),
+      pid: process.pid,
+    });
+
+    try {
+      writeFileSync(claimPath, `${JSON.stringify(claim, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+      return Object.freeze({ state: "ACQUIRED", claim });
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const existing = readJsonOrNull(claimPath);
+      if (existing === null) return this.claim(eventKey);
+      if (existing.eventKey !== eventKey) {
+        throw new Error("settlement claim identity mismatch");
+      }
+      return Object.freeze({ state: "EXISTS", claim: Object.freeze(existing) });
+    }
+  }
+
+  getClaim(eventKey) {
+    if (typeof eventKey !== "string" || eventKey === "") return null;
+    const claimPath = join(this.claimDirectory, claimName(eventKey));
+    const claim = readJsonOrNull(claimPath);
+    if (claim === null) return null;
+    if (claim.eventKey !== eventKey) throw new Error("settlement claim identity mismatch");
+    return Object.freeze(claim);
+  }
+
+  clearClaim(eventKey, claimId) {
+    if (typeof eventKey !== "string" || eventKey === "") {
+      throw new TypeError("eventKey is required");
+    }
+    if (typeof claimId !== "string" || claimId === "") {
+      throw new TypeError("claimId is required");
+    }
+    const claimPath = join(this.claimDirectory, claimName(eventKey));
+    const claim = readJsonOrNull(claimPath);
+    if (claim === null) return false;
+    if (claim.eventKey !== eventKey || claim.claimId !== claimId) {
+      throw new Error("settlement claim ownership mismatch");
+    }
+    rmSync(claimPath, { force: true });
+    return true;
   }
 }

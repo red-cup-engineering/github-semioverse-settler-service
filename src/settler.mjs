@@ -98,7 +98,8 @@ export class MemoryReceiptStore {
 }
 
 // One process must not race the same provider revision across the network boundary.
-// Cross-process/crash safety remains the receipt store / receiver's responsibility.
+// Durable receipt stores may additionally expose claim/clearClaim to prevent
+// independent processes from repeating an admission whose outcome is ambiguous.
 const inflightByReceiptStore = new WeakMap();
 
 function inflightFor(receiptStore) {
@@ -117,6 +118,29 @@ function checkedReceipt(receipt) {
   return receipt;
 }
 
+function hasDurableClaimInterface(receiptStore) {
+  const claim = typeof receiptStore.claim === 'function';
+  const clearClaim = typeof receiptStore.clearClaim === 'function';
+  if (claim !== clearClaim) {
+    throw new TypeError('receiptStore durable claim interface requires claim and clearClaim together');
+  }
+  return claim;
+}
+
+const receiptOutcome = (receipt) => Object.freeze({ kind: 'RECEIPT', receipt });
+const pendingOutcome = (claim) => Object.freeze({ kind: 'PENDING', claim });
+
+function exposedResult(state, envelope, outcome) {
+  if (outcome.kind === 'PENDING') {
+    return Object.freeze({
+      state: 'PENDING_RECEIVER_READBACK',
+      envelope,
+      claim: outcome.claim,
+    });
+  }
+  return Object.freeze({ state, envelope, receipt: outcome.receipt });
+}
+
 export async function settleGitHubEvent({ event, receiptStore, admit }) {
   if (!receiptStore || typeof receiptStore.get !== 'function' || typeof receiptStore.put !== 'function') {
     throw new TypeError('receiptStore get/put interface is required');
@@ -129,19 +153,45 @@ export async function settleGitHubEvent({ event, receiptStore, admit }) {
   const inflight = inflightFor(receiptStore);
   const pending = inflight.get(envelope.eventKey);
   if (pending !== undefined) {
-    const receipt = await pending;
-    return Object.freeze({ state: 'DUPLICATE_RECEIVED', envelope, receipt });
+    const outcome = await pending;
+    return exposedResult('DUPLICATE_RECEIVED', envelope, outcome);
   }
 
+  const durableClaims = hasDurableClaimInterface(receiptStore);
   const admission = (async () => {
+    let claim = null;
+    if (durableClaims) {
+      const claimResult = receiptStore.claim(envelope.eventKey);
+      if (!claimResult || (claimResult.state !== 'ACQUIRED' && claimResult.state !== 'EXISTS')) {
+        throw new Error('receiptStore claim must return ACQUIRED or EXISTS');
+      }
+      if (claimResult.state === 'EXISTS') {
+        const racedReceipt = receiptStore.get(envelope.eventKey);
+        return racedReceipt ? receiptOutcome(racedReceipt) : pendingOutcome(claimResult.claim);
+      }
+      claim = claimResult.claim;
+    }
+
     const receipt = checkedReceipt(await admit(envelope));
-    receiptStore.put(envelope.eventKey, receipt);
-    return receiptStore.get(envelope.eventKey);
+    try {
+      receiptStore.put(envelope.eventKey, receipt);
+    } catch (error) {
+      const racedReceipt = receiptStore.get(envelope.eventKey);
+      if (!racedReceipt) throw error;
+    }
+    const stored = receiptStore.get(envelope.eventKey);
+    if (!stored) throw new Error('Semioverse receipt was not durable after admission');
+
+    if (claim !== null) {
+      receiptStore.clearClaim(envelope.eventKey, claim.claimId);
+    }
+    return receiptOutcome(stored);
   })();
+
   inflight.set(envelope.eventKey, admission);
   try {
-    const receipt = await admission;
-    return Object.freeze({ state: 'RECEIVED', envelope, receipt });
+    const outcome = await admission;
+    return exposedResult('RECEIVED', envelope, outcome);
   } finally {
     if (inflight.get(envelope.eventKey) === admission) inflight.delete(envelope.eventKey);
   }
