@@ -4,6 +4,37 @@ Deterministic GitHub→MetroPlat receiving core for `red-cup-engineering/git-ser
 
 This package keeps GitHub provider identity distinct from organizational truth. It normalizes selected material GitHub deltas into typed envelopes, preserves repository ID plus observed owner/name, binds exact provider revision, extracts machine-addressable WorkUnit fields when present, and provides replay-safe settlement through a durable receipt store.
 
+Issue comments, PR review comments, and reviews retain their own provider
+identities and parent links. The arrival retains the exact object material,
+original author, observing actor, repository visibility, and an NI commitment.
+Material edits on an unchanged PR head and workflow reruns remain distinct;
+transport retries converge. `submission` extracts the Group's public filing
+form fields as testimony, including complaint/requirement/idea distinctions
+and the requester's satisfaction conditions. It grants no effect authority.
+
+The former normalizer discarded this material and keyed some deltas only by
+the parent/head. Its receipts cannot prove reception of the content it dropped.
+The material-bearing event keys deliberately require a new receiving receipt;
+do not migrate old metadata-only receipts as evidence of complete admission.
+
+## Observe the actual GitHub estate
+
+Run `node scripts/observe-github.mjs` with authenticated `gh`. It discovers the
+current account, its organizations, and accessible repositories from paginated
+GitHub APIs, then reads every open issue and PR in those owner namespaces.
+`--owner NAME` may be repeated to select explicit namespaces; `--summary`
+prints coverage counts only. `--pull-checks` additionally reads the exact PR
+head, commit statuses, and check runs. Fetch the issue/PR, comments, and reviews
+at their returned URLs when evaluating or acting on an obligation.
+
+Rows are JSON lines on stdout, not another inventory or work-state database.
+Only `github.coverage-complete` proves the selected enumeration completed;
+partial searches, pagination drift, API errors, and size/time bounds produce
+`github.coverage-incomplete` and exit 1. Search results beyond GitHub's 1,000
+result limit fall back to paginated repository issue endpoints. Calls run
+serially with bounded response sizes. Discovery includes archived repositories
+so unresolved original obligations are not erased by an archive flag.
+
 It deliberately does **not** make GitHub canonical, infer authority from repository names, or call an LLM on the happy path.
 
 ## Executable receiving edge

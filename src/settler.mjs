@@ -1,17 +1,50 @@
+import { createHash } from 'node:crypto';
+
 const REQUIRED = (value, name) => {
   if (typeof value !== 'string' || value.trim() === '') throw new TypeError(`${name} is required`);
   return value.trim();
 };
 
 const objectFor = (event) => {
+  // Comments and reviews are distinct provider objects even when the webhook
+  // includes their parent issue or PR. Selecting the parent loses their identity.
+  if (event.comment) return [event.pull_request ? 'pull_request_review_comment' : 'issue_comment', event.comment];
+  if (event.review) return ['review', event.review];
   if (event.pull_request) return ['pull_request', event.pull_request];
   if (event.issue) return ['issue', event.issue];
   if (event.workflow_run) return ['workflow_run', event.workflow_run];
-  if (event.review) return ['review', event.review];
   if (event.deployment) return ['deployment', event.deployment];
   if (event.repository) return ['repository', event.repository];
   throw new TypeError('unsupported GitHub event object');
 };
+
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+  }
+  return value;
+}
+
+/** Provider bytes are evidence, never an office appointment or an execution grant. */
+function submissionOf(body) {
+  if (typeof body !== 'string') return null;
+  const fields = {};
+  for (const match of body.matchAll(/^### ([^\n]+)\n+([\s\S]*?)(?=^### |$(?![\s\S]))/gm)) {
+    const value = match[2].trim();
+    if (value && value !== '_No response_') fields[match[1].trim()] = value;
+  }
+  const kind = fields['Submission type'];
+  if (!['Issue', 'Complaint', 'Requirement', 'Idea', 'Question'].includes(kind)) return null;
+  return Object.freeze({
+    kind: kind.toLowerCase(),
+    affected: fields['Affected service or resource'] ?? null,
+    need: fields['What happened or what do you need?'] ?? null,
+    conditions: fields['What would a satisfactory outcome look like?'] ?? null,
+    evidence: fields['Context and evidence'] ?? null,
+    urgency: fields['Urgency'] ?? null,
+  });
+}
 
 function machineFields(body = '') {
   if (typeof body !== 'string') return {};
@@ -48,10 +81,16 @@ export function normalizeGitHubEvent(event) {
   if (revision === undefined || revision === null) throw new TypeError('provider revision is required');
   const action = REQUIRED(event.action ?? 'observed', 'action');
   const providerObjectKey = `github:repo:${repo.id}:${objectType}:${objectId}`;
-  const eventKey = `${providerObjectKey}:revision:${String(revision)}:action:${action}`;
+  // A PR's exact head is necessary evidence, but does not distinguish reviews,
+  // body edits, or re-run workflows on the same head. Delivery IDs are transport
+  // coordinates and are deliberately excluded from the material commitment.
+  const material = structuredClone(object);
+  const materialIdentity = `ni:///sha-256;${createHash('sha256').update(JSON.stringify(canonical(material))).digest('base64url')}`;
+  const eventKey = `${providerObjectKey}:revision:${String(revision)}:action:${action}:material:${materialIdentity}`;
   const body = object.body ?? '';
   const fields = machineFields(body);
-  const occurredAt = object.updated_at ?? object.created_at ?? event.occurred_at ?? null;
+  const occurredAt = object.updated_at ?? object.submitted_at ?? object.created_at ?? event.occurred_at ?? null;
+  const parent = event.comment || event.review ? event.pull_request ?? event.issue : null;
 
   return Object.freeze({
     schema: 'semioverse.github-delta.v1',
@@ -67,10 +106,23 @@ export function normalizeGitHubEvent(event) {
       objectNumber: Number.isInteger(object.number) ? object.number : null,
       revision: String(revision),
       actor: event.sender?.login ?? null,
+      actorId: event.sender?.node_id ?? event.sender?.id ?? null,
+      author: object.user?.login ?? null,
+      authorId: object.user?.node_id ?? object.user?.id ?? null,
+      visibility: repo.private === true ? 'private' : repo.private === false ? 'public' : 'unknown',
       occurredAt,
       deliveryId: event.delivery_id ?? null,
       url: object.html_url ?? repo.html_url ?? null,
+      ...(parent ? { parent: Object.freeze({
+        objectId: String(parent.node_id ?? parent.id ?? parent.number),
+        objectNumber: parent.number ?? null,
+        url: parent.html_url ?? null,
+        headSha: parent.head?.sha ?? null,
+      }) } : {}),
     }),
+    materialIdentity,
+    material: Object.freeze(material),
+    submission: submissionOf(body),
     work: Object.freeze({
       workRef: fields.work_ref ?? null,
       correlation: fields.correlation ?? null,
