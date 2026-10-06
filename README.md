@@ -38,7 +38,9 @@ Rows are JSON lines on stdout, not another inventory or work-state database.
 Only `github.coverage-complete` proves the selected enumeration completed;
 partial searches, pagination drift, API errors, and size/time bounds produce
 `github.coverage-incomplete` and exit 1. Search results beyond GitHub's 1,000
-result limit fall back to paginated repository issue endpoints. Calls run
+result limit, or an explicitly exhausted search quota, fall back to paginated
+repository issue endpoints. An exhausted search quota is not retried during
+that observation. Calls run
 serially with bounded response sizes. Discovery includes archived repositories
 so unresolved original obligations are not erased by an archive flag.
 

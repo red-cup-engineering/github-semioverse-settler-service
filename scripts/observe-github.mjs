@@ -31,12 +31,24 @@ function pages(path, field) {
   }
   throw new Error(`Pagination bound reached; coverage is incomplete: ${path}`);
 }
+let searchQuotaUnavailable = false;
 function search(query) {
+  if (searchQuotaUnavailable) return null;
   const result = [];
   const seen = new Set();
   let expected;
   for (let page = 1; page <= Math.ceil(1000 / PAGE_SIZE); page++) {
-    const batch = api(`search/issues?q=${encodeURIComponent(query)}&sort=created&order=asc&per_page=${PAGE_SIZE}&page=${page}`);
+    let batch;
+    try {
+      batch = api(`search/issues?q=${encodeURIComponent(query)}&sort=created&order=asc&per_page=${PAGE_SIZE}&page=${page}`);
+    } catch (error) {
+      // Search has a separate, much smaller quota than repository APIs. Continue
+      // from the discovered repositories, without retries or a partial marker.
+      const diagnostic = String(error.stderr ?? error.message);
+      if (!diagnostic.includes('API rate limit exceeded')) throw error;
+      searchQuotaUnavailable = true;
+      return null;
+    }
     if (batch.incomplete_results || !Array.isArray(batch.items)) throw new Error(`Incomplete GitHub search: ${query}`);
     if (batch.total_count > 1000) return null; // Partition by actual repositories below.
     if (expected === undefined) expected = batch.total_count;
