@@ -27,6 +27,13 @@ prints coverage counts only. `--pull-checks` additionally reads the exact PR
 head, commit statuses, and check runs. Fetch the issue/PR, comments, and reviews
 at their returned URLs when evaluating or acting on an obligation.
 
+`--closed-since YYYY-MM-DDTHH:MM:SSZ` adds issues and PRs whose closed state
+changed since the supplied UTC boundary, while still observing every open
+item. This catches recently merged, rejected or closed work that an open-only
+scan misses. The rows retain provider state and closure time; closure alone
+does not establish customer acceptance. Commit status contexts are paginated
+with identity/count checks rather than stopping at the first response page.
+
 Rows are JSON lines on stdout, not another inventory or work-state database.
 Only `github.coverage-complete` proves the selected enumeration completed;
 partial searches, pagination drift, API errors, and size/time bounds produce

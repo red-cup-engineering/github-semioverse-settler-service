@@ -7,8 +7,10 @@ const args = process.argv.slice(2);
 const summaryOnly = args.includes('--summary');
 const checkPulls = args.includes('--pull-checks');
 const explicitOwners = [];
+let closedSince;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--owner' && /^[A-Za-z0-9-]+$/.test(args[i + 1] ?? '')) explicitOwners.push(args[++i]);
+  else if (args[i] === '--closed-since' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(args[i + 1] ?? '') && Number.isFinite(Date.parse(args[i + 1]))) closedSince = args[++i];
   else if (!['--summary', '--pull-checks'].includes(args[i])) throw new TypeError(`Unknown argument: ${args[i]}`);
 }
 const PAGE_SIZE = 30;
@@ -48,9 +50,28 @@ function search(query) {
   }
   throw new Error(`Search bound reached; coverage is incomplete: ${query}`);
 }
-function openWork(repository) {
-  const issues = pages(`repos/${repository}/issues?state=open&sort=created&direction=asc`);
-  return issues;
+function repositoryWork(repository, state, since) {
+  return pages(`repos/${repository}/issues?state=${state}&sort=created&direction=asc${since ? `&since=${encodeURIComponent(since)}` : ''}`);
+}
+function combinedStatus(repository, head) {
+  const statuses = [];
+  const seen = new Set();
+  let expected;
+  let state;
+  for (let page = 1; page <= 1000; page++) {
+    const result = api(`repos/${repository}/commits/${head}/status?per_page=${PAGE_SIZE}&page=${page}`);
+    if (!Number.isInteger(result.total_count) || !Array.isArray(result.statuses)) throw new Error(`Incomplete combined status: ${repository}@${head}`);
+    if (expected !== undefined && result.total_count !== expected) throw new Error(`Commit status contexts changed during pagination: ${repository}@${head}`);
+    expected = result.total_count;
+    state = result.state;
+    for (const status of result.statuses) {
+      if (!Number.isInteger(status.id) || seen.has(status.id)) throw new Error(`Repeated or missing commit status identity: ${repository}@${head}`);
+      seen.add(status.id); statuses.push(status);
+    }
+    if (statuses.length === expected) return { state, statuses };
+    if (result.statuses.length < PAGE_SIZE) throw new Error(`Premature end of commit status contexts: ${repository}@${head}`);
+  }
+  throw new Error(`Commit status bound reached; coverage is incomplete: ${repository}@${head}`);
 }
 const emit = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 try {
@@ -65,33 +86,40 @@ try {
   // Earlier rows may be useful, but a failed process is never full coverage.
   for (const owner of owners) {
     let items = search(`is:open user:${owner}`);
-    if (items === null) items = selected.filter(repo => repo.owner.login === owner).flatMap(repo => openWork(repo.full_name));
+    if (items === null) items = selected.filter(repo => repo.owner.login === owner).flatMap(repo => repositoryWork(repo.full_name, 'open'));
     const issues = items.filter(item => !item.pull_request);
     const pulls = items.filter(item => item.pull_request);
-    const coverage = { owner, repositories: selected.filter(repo => repo.owner.login === owner).length, issues: issues.length, pulls: pulls.length };
+    let closed = closedSince ? search(`is:closed user:${owner} updated:>=${closedSince}`) : [];
+    if (closed === null) closed = selected.filter(repo => repo.owner.login === owner).flatMap(repo => repositoryWork(repo.full_name, 'closed', closedSince));
+    const identities = new Set(items.map(item => item.id));
+    for (const item of closed) {
+      if (identities.has(item.id)) throw new Error(`Work changed state during observation; rerun: ${item.html_url}`);
+      identities.add(item.id);
+    }
+    const coverage = { owner, repositories: selected.filter(repo => repo.owner.login === owner).length, issues: issues.length, pulls: pulls.length, changedClosed: closed.length };
     stats.push(coverage);
     emit({ kind: 'github.owner-coverage', ...coverage });
-    for (const item of items) {
+    for (const item of [...items, ...closed]) {
       const repository = item.repository_url.split('/repos/')[1];
       let checks;
       if (checkPulls && item.pull_request) {
         const pull = api(`repos/${repository}/pulls/${item.number}`);
         const head = pull.head.sha;
-        const status = api(`repos/${repository}/commits/${head}/status`);
+        const status = combinedStatus(repository, head);
         const runs = pages(`repos/${repository}/commits/${head}/check-runs`, 'check_runs');
         checks = { head, draft: pull.draft, merged: pull.merged, mergeable: pull.mergeable,
           status: status.state, statuses: status.statuses.map(s => ({ context: s.context, state: s.state, url: s.target_url })),
           runs: runs.map(run => ({ name: run.name, status: run.status, conclusion: run.conclusion, url: run.html_url })) };
       }
       if (!summaryOnly || checks) emit({ kind: item.pull_request ? 'github.pull' : 'github.issue', repository,
-        number: item.number, id: item.node_id, url: item.html_url, title: item.title,
+        number: item.number, id: item.node_id, url: item.html_url, title: item.title, state: item.state, closedAt: item.closed_at ?? null,
         author: item.user?.login, updatedAt: item.updated_at, ...(checks ? { checks } : {}) });
     }
   }
   emit({ kind: 'github.coverage-complete', observedAt: new Date().toISOString(), principal: user.login,
     accessibleRepositories: repositories.length, repositories: selected.length, owners: stats,
     unselectedOwners: [...new Set(repositories.filter(repo => !owners.includes(repo.owner.login)).map(repo => repo.owner.login))],
-    pullChecks: checkPulls });
+    pullChecks: checkPulls, closedSince: closedSince ?? null });
 } catch (error) {
   emit({ kind: 'github.coverage-incomplete', reason: error.message });
   process.exitCode = 1;
