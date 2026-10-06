@@ -73,6 +73,35 @@ test("a second process-shaped store waits for receiver readback instead of admit
   }
 });
 
+test("a durable receipt retires stale claim residue without another admission", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "github-settler-"));
+  let calls = 0;
+  try {
+    const path = join(dir, "receipts.json");
+    const store = new FileReceiptStore(path);
+    const event = issueEvent();
+    const eventKey = normalizeGitHubEvent(event).eventKey;
+    store.claim(eventKey);
+    store.put(eventKey, { receiptId: "semioverse:already-received" });
+
+    const result = await settleGitHubEvent({
+      event,
+      receiptStore: new FileReceiptStore(path),
+      admit: async () => {
+        calls += 1;
+        return { receiptId: "unexpected" };
+      },
+    });
+
+    assert.equal(result.state, "DUPLICATE_RECEIVED");
+    assert.equal(result.receipt.receiptId, "semioverse:already-received");
+    assert.equal(calls, 0);
+    assert.equal(store.getClaim(eventKey), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("ambiguous admission failure leaves a durable claim and suppresses blind retry", async () => {
   const dir = mkdtempSync(join(tmpdir(), "github-settler-"));
   let calls = 0;

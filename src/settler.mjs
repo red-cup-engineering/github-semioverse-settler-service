@@ -97,9 +97,6 @@ export class MemoryReceiptStore {
   }
 }
 
-// One process must not race the same provider revision across the network boundary.
-// Durable receipt stores may additionally expose claim/clearClaim to prevent
-// independent processes from repeating an admission whose outcome is ambiguous.
 const inflightByReceiptStore = new WeakMap();
 
 function inflightFor(receiptStore) {
@@ -127,6 +124,12 @@ function hasDurableClaimInterface(receiptStore) {
   return claim;
 }
 
+function clearSettledClaim(receiptStore, eventKey) {
+  if (typeof receiptStore.getClaim !== 'function' || typeof receiptStore.clearClaim !== 'function') return;
+  const claim = receiptStore.getClaim(eventKey);
+  if (claim?.claimId) receiptStore.clearClaim(eventKey, claim.claimId);
+}
+
 const receiptOutcome = (receipt) => Object.freeze({ kind: 'RECEIPT', receipt });
 const pendingOutcome = (claim) => Object.freeze({ kind: 'PENDING', claim });
 
@@ -148,7 +151,10 @@ export async function settleGitHubEvent({ event, receiptStore, admit }) {
   if (typeof admit !== 'function') throw new TypeError('admit function is required');
   const envelope = normalizeGitHubEvent(event);
   const existing = receiptStore.get(envelope.eventKey);
-  if (existing) return Object.freeze({ state: 'DUPLICATE_RECEIVED', envelope, receipt: existing });
+  if (existing) {
+    clearSettledClaim(receiptStore, envelope.eventKey);
+    return Object.freeze({ state: 'DUPLICATE_RECEIVED', envelope, receipt: existing });
+  }
 
   const inflight = inflightFor(receiptStore);
   const pending = inflight.get(envelope.eventKey);
@@ -167,7 +173,11 @@ export async function settleGitHubEvent({ event, receiptStore, admit }) {
       }
       if (claimResult.state === 'EXISTS') {
         const racedReceipt = receiptStore.get(envelope.eventKey);
-        return racedReceipt ? receiptOutcome(racedReceipt) : pendingOutcome(claimResult.claim);
+        if (racedReceipt) {
+          clearSettledClaim(receiptStore, envelope.eventKey);
+          return receiptOutcome(racedReceipt);
+        }
+        return pendingOutcome(claimResult.claim);
       }
       claim = claimResult.claim;
     }
