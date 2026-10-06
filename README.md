@@ -1,18 +1,43 @@
 # GitHub Semioverse settler service
 
-Deterministic core for `red-cup-engineering/git-services-section#1`.
+Deterministic GitHub→MetroPlat receiving core for `red-cup-engineering/git-services-section#1`.
 
-This package keeps GitHub provider identity distinct from organizational truth. It normalizes selected material GitHub deltas into typed envelopes, preserves repository ID plus observed owner/name, binds exact provider revision, extracts machine-addressable WorkUnit fields when present, and provides replay-safe settlement through a caller-supplied durable receipt store and Semioverse admission function.
+This package keeps GitHub provider identity distinct from organizational truth. It normalizes selected material GitHub deltas into typed envelopes, preserves repository ID plus observed owner/name, binds exact provider revision, extracts machine-addressable WorkUnit fields when present, and provides replay-safe settlement through a durable receipt store.
 
 It deliberately does **not** make GitHub canonical, infer authority from repository names, or call an LLM on the happy path.
 
-## Runtime boundary
+## Executable receiving edge
 
-A deployed adapter still must provide:
-- webhook/event or bounded reconciliation intake;
-- durable receipt/high-water storage;
-- authenticated Semioverse admission and independent receipt readback;
-- conflict/dead-letter handling;
-- automatic sync-back after Semioverse outage.
+`settle-github-event` reads one GitHub event JSON object on stdin and:
 
-The core's tests prove stable provider-object identity across repository rename, duplicate-free replay, revision advancement, and exact PR-head binding. Deployment/provider receipt remains separate.
+1. normalizes it as `semioverse.github-delta.v1`;
+2. checks a persistent event-key→receipt store;
+3. POSTs an unseen envelope to MetroPlat's generic HTTP arrival boundary;
+4. requires a successful `metroplat.arrival.receipt`;
+5. persists the receipt mapping;
+6. returns `DUPLICATE_RECEIVED` without a second network effect on unchanged replay.
+
+Current MetroPlat source admits generic HTTP material at the **mounted root POST**. The older `/arrivals` description is stale; the adapter refuses a non-root URL so that drift cannot be silently normalized.
+
+Environment:
+
+- `METROPLAT_ARRIVAL_URL` — required mounted-root URL, for example `http://host:port/`.
+- `METROPLAT_AUTHORIZATION` — optional Authorization header value supplied by the deployment secret boundary.
+- `GITHUB_SEMIOVERSE_RECEIPT_FILE` — optional durable receipt map path; defaults to `.state/github-semioverse-receipts.json`.
+
+No credential value is persisted in the receipt store.
+
+## What the receipt means
+
+A successful adapter call proves that MetroPlat admitted the exact HTTP arrival carrying the typed GitHub delta and returned a durable arrival identity/digest. It does **not** by itself prove that downstream organizational semantics, authority, or conflict resolution accepted every field in the delta.
+
+The next runtime slice still owns:
+
+- webhook/event intake plus bounded reconciliation/poll fallback;
+- authenticated deployment configuration for the real MetroPlat endpoint;
+- conflict/authority quarantine;
+- backlog/dead-letter/lag metrics;
+- automatic SYNC_BACK after receiver outage;
+- downstream semantic projection/readback beyond raw arrival admission.
+
+The focused service tests cover stable provider identity across repository rename, exact PR-head revision binding, persistent replay suppression, and the MetroPlat root-admission contract.
