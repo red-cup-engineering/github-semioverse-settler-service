@@ -38,6 +38,28 @@ test('unchanged replay is idempotent and does not call admit twice', async () =>
   assert.equal(replay.receipt.receiptId, first.receipt.receiptId);
 });
 
+test('concurrent unchanged replay coalesces to one admission in one settler process', async () => {
+  const store = new MemoryReceiptStore();
+  let calls = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const admit = async (envelope) => {
+    calls += 1;
+    await gate;
+    return { receiptId: 'semioverse:coalesced', eventKey: envelope.eventKey };
+  };
+
+  const first = settleGitHubEvent({ event: issueEvent(), receiptStore: store, admit });
+  const replay = settleGitHubEvent({ event: issueEvent(), receiptStore: store, admit });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+  release();
+
+  const results = await Promise.all([first, replay]);
+  assert.deepEqual(results.map((result) => result.state).sort(), ['DUPLICATE_RECEIVED', 'RECEIVED']);
+  assert.equal(results[0].receipt.receiptId, results[1].receipt.receiptId);
+});
+
 test('later provider revision advances the same object identity with a new event identity', async () => {
   const store = new MemoryReceiptStore();
   let calls = 0;

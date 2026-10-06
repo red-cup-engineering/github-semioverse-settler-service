@@ -97,6 +97,26 @@ export class MemoryReceiptStore {
   }
 }
 
+// One process must not race the same provider revision across the network boundary.
+// Cross-process/crash safety remains the receipt store / receiver's responsibility.
+const inflightByReceiptStore = new WeakMap();
+
+function inflightFor(receiptStore) {
+  let inflight = inflightByReceiptStore.get(receiptStore);
+  if (inflight === undefined) {
+    inflight = new Map();
+    inflightByReceiptStore.set(receiptStore, inflight);
+  }
+  return inflight;
+}
+
+function checkedReceipt(receipt) {
+  if (!receipt || typeof receipt.receiptId !== 'string' || receipt.receiptId.trim() === '') {
+    throw new Error('Semioverse admission must return receiptId');
+  }
+  return receipt;
+}
+
 export async function settleGitHubEvent({ event, receiptStore, admit }) {
   if (!receiptStore || typeof receiptStore.get !== 'function' || typeof receiptStore.put !== 'function') {
     throw new TypeError('receiptStore get/put interface is required');
@@ -106,10 +126,23 @@ export async function settleGitHubEvent({ event, receiptStore, admit }) {
   const existing = receiptStore.get(envelope.eventKey);
   if (existing) return Object.freeze({ state: 'DUPLICATE_RECEIVED', envelope, receipt: existing });
 
-  const receipt = await admit(envelope);
-  if (!receipt || typeof receipt.receiptId !== 'string' || receipt.receiptId.trim() === '') {
-    throw new Error('Semioverse admission must return receiptId');
+  const inflight = inflightFor(receiptStore);
+  const pending = inflight.get(envelope.eventKey);
+  if (pending !== undefined) {
+    const receipt = await pending;
+    return Object.freeze({ state: 'DUPLICATE_RECEIVED', envelope, receipt });
   }
-  receiptStore.put(envelope.eventKey, receipt);
-  return Object.freeze({ state: 'RECEIVED', envelope, receipt: receiptStore.get(envelope.eventKey) });
+
+  const admission = (async () => {
+    const receipt = checkedReceipt(await admit(envelope));
+    receiptStore.put(envelope.eventKey, receipt);
+    return receiptStore.get(envelope.eventKey);
+  })();
+  inflight.set(envelope.eventKey, admission);
+  try {
+    const receipt = await admission;
+    return Object.freeze({ state: 'RECEIVED', envelope, receipt });
+  } finally {
+    if (inflight.get(envelope.eventKey) === admission) inflight.delete(envelope.eventKey);
+  }
 }
