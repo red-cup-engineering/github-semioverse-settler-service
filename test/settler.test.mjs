@@ -106,6 +106,7 @@ test('distinct comments on one issue retain their identity, author, material, an
 
 test('a review is not collapsed into the pull request carrying it', () => {
   const envelope = normalizeGitHubEvent(issueEvent({ issue: undefined,
+    delivery_id: undefined,
     pull_request: { node_id: 'PR_7', number: 2, head: { sha: 'abc123' } },
     review: { node_id: 'PRR_1', body: 'The requirement is unmet', state: 'CHANGES_REQUESTED',
       submitted_at: '2026-10-06T04:03:00Z', user: { login: 'receiver' } } }));

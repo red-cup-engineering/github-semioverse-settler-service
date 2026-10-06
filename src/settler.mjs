@@ -65,7 +65,7 @@ function machineFields(body = '') {
 const revisionFor = (type, object, event) => {
   if (type === 'pull_request') return object.head?.sha ?? object.updated_at ?? event.delivery_id;
   if (type === 'workflow_run') return object.head_sha ?? object.updated_at ?? event.delivery_id;
-  return object.updated_at ?? object.sha ?? event.delivery_id;
+  return object.updated_at ?? object.submitted_at ?? object.created_at ?? object.sha ?? event.delivery_id;
 };
 
 export function normalizeGitHubEvent(event) {
