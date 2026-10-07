@@ -15,10 +15,21 @@ for (let i = 0; i < args.length; i++) {
 }
 const PAGE_SIZE = 30;
 function api(path) {
-  return JSON.parse(execFileSync('gh', ['api', path], {
-    encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }));
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return JSON.parse(execFileSync('gh', ['api', path], {
+        encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }));
+    } catch (error) {
+      const status = /\bHTTP (500|502|503|504)\b/u.exec(String(error.stderr ?? error.message))?.[1];
+      // Retry only provider server failures, at the same page and exact head.
+      // Quota, authority, malformed data and exhausted retries still fail visibly.
+      if (!status || attempt >= 3) throw error;
+      process.stderr.write(`GitHub HTTP ${status}; retry ${attempt + 1}/3: ${path}\n`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250 * attempt);
+    }
+  }
 }
 function pages(path, field) {
   const result = [];
