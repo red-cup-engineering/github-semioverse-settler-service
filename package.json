@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Deterministic GitHub delta normalization, durable receipt mapping, MetroPlat arrival admission, and bounded high-water reconciliation.",
   "scripts": {
-    "check": "node --check src/settler.mjs && node --check src/file-receipt-store.mjs && node --check src/metroplat-http-admit.mjs && node --check src/native-work-receiving.mjs && node --check src/reconcile.mjs && node --check scripts/settle-github-event.mjs && node --check scripts/observe-github.mjs && node --check test/settler.test.mjs && node --check test/runtime-edge.test.mjs && node --check test/reconcile.test.mjs",
+    "check": "node --check src/settler.mjs && node --check src/file-receipt-store.mjs && node --check src/metroplat-http-admit.mjs && node --check src/native-work-receiving.mjs && node --check src/reconcile.mjs && node --check src/github-poll.mjs && node --check scripts/settle-github-event.mjs && node --check scripts/observe-github.mjs && node --check test/settler.test.mjs && node --check test/runtime-edge.test.mjs && node --check test/reconcile.test.mjs && node --check test/github-poll.test.mjs",
     "test": "node --test test/*.test.mjs",
     "verify": "npm run check && npm test"
   },
@@ -14,13 +14,15 @@
   },
   "bin": {
     "settle-github-event": "./scripts/settle-github-event.mjs",
-    "observe-github": "./scripts/observe-github.mjs"
+    "observe-github": "./scripts/observe-github.mjs",
+    "reconcile-github": "./scripts/reconcile-github.mjs"
   },
   "exports": {
     ".": "./src/settler.mjs",
     "./file-receipt-store": "./src/file-receipt-store.mjs",
     "./metroplat-http-admit": "./src/metroplat-http-admit.mjs",
     "./native-work-receiving": "./src/native-work-receiving.mjs",
-    "./reconcile": "./src/reconcile.mjs"
+    "./reconcile": "./src/reconcile.mjs",
+    "./github-poll": "./src/github-poll.mjs"
   }
 }
