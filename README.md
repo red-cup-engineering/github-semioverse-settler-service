@@ -69,6 +69,17 @@ not match the selected receiver. Receipt stages distinguish native admission,
 routing, allocation, implementation and acceptance. Receiving alone proves
 neither staffing nor customer acceptance.
 
+Replay comparison verifies the recorded source document and compares its full
+observation and supplied native interpretation fields, ignoring only JSON object-key order and
+the transport-only delivery ID. Material, original author, observing actor,
+visibility, scope, and interpretation remain distinct. A transport retry reuses
+the original recorded document without changing its bytes or NI commitment.
+The receipt names that actual carrier in `sourceDocument` and the offered
+carrier in `offeredSourceDocument`; `stages.offeredSourceRetained` is false when
+only the earlier equivalent carrier is retained. It does not claim that the
+later transport observation was separately persisted. Exact retained-carrier
+readback is still required, and corrupt source evidence refuses before opening.
+
 This route currently accepts verified **public** repository material only.
 Private or unknown visibility is refused because the installed public board
 does not establish a private receiving audience. Source interpretation is

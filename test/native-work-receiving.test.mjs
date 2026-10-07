@@ -73,3 +73,104 @@ test('source selection drift refuses a speculative second opening', async () => 
       : { position: 'changed', threads: [] };
   } }), /changed while paging/);
 });
+
+for (const variant of ['property order', 'delivery retry']) {
+  test(`native replay retains the original source document across ${variant}`, async () => {
+    const original = input();
+    original.event.delivery_id = 'delivery-1';
+    const first = prepareGitHubWork(original);
+    const actual = stored(first);
+    const retried = structuredClone(original);
+    if (variant === 'property order') retried.event.issue = Object.fromEntries(Object.entries(retried.event.issue).reverse());
+    else retried.event.delivery_id = 'delivery-2';
+    const next = prepareGitHubWork(retried);
+    assert.equal(next.envelope.eventKey, first.envelope.eventKey);
+    assert.notEqual(next.document.commitment, first.document.commitment);
+    const originalLocator = actual.opening.sources[1].locator;
+    const receipt = await receivePreparedGitHubWork({ prepared: next, call: async verb => {
+      assert.equal(verb, 'work-board', 'unchanged provider observation must not create another native opening');
+      return { position: 'one', threads: [actual], matched: 1 };
+    } });
+    assert.equal(receipt.replay, true);
+    assert.equal(receipt.sourceDocument, first.document.commitment);
+    assert.equal(receipt.offeredSourceDocument, next.document.commitment);
+    assert.equal(receipt.stages.sourceRetained, true);
+    assert.equal(receipt.stages.offeredSourceRetained, false);
+    assert.equal(actual.opening.sources[1].locator, originalLocator);
+    assert.equal(readGitHubSourceDocument(actual.opening.sources[1]).source.deliveryId, 'delivery-1');
+  });
+}
+
+for (const variant of ['material', 'author', 'observer', 'scope', 'interpretation']) {
+  test(`native replay does not collapse changed ${variant}`, async () => {
+    const original = input();
+    const first = prepareGitHubWork(original);
+    const prior = stored(first);
+    const changed = structuredClone(original);
+    if (variant === 'material') changed.event.issue.body = 'A materially different complaint';
+    if (variant === 'author') changed.event.issue.user = { id: 4, login: 'different-author' };
+    if (variant === 'observer') changed.event.sender = { id: 5, login: 'different-observer' };
+    if (variant === 'scope') changed.binding.scope = ['service:other'];
+    if (variant === 'interpretation') changed.opening.observation = 'A different explicit interpretation';
+    const next = prepareGitHubWork(changed);
+    const admitted = { ...stored(next), id: 'new-thread' };
+    let opens = 0;
+    const receipt = await receivePreparedGitHubWork({ prepared: next, call: async (verb, args) => {
+      if (verb === 'work-open') { opens++; return { id: admitted.id }; }
+      return args.source ? { position: 'one', threads: [prior], matched: 1 } : { threads: [admitted] };
+    } });
+    assert.equal(opens, 1);
+    assert.equal(receipt.replay, false);
+    assert.equal(receipt.sourceDocument, next.document.commitment);
+    assert.equal(receipt.stages.offeredSourceRetained, true);
+    assert.equal(receipt.stages.accepted, false);
+  });
+}
+
+test('native replay refuses corrupted stored evidence before a speculative opening', async () => {
+  const prepared = prepareGitHubWork(input());
+  const actual = stored(prepared);
+  actual.opening.sources[1].commitment = 'wrong';
+  await assert.rejects(receivePreparedGitHubWork({ prepared, call: async verb => {
+    assert.equal(verb, 'work-board');
+    return { position: 'one', threads: [actual], matched: 1 };
+  } }), /commitment mismatch/);
+});
+
+test('native replay still requires exact readback of the original retained carrier', async () => {
+  const original = input();
+  original.event.delivery_id = 'delivery-1';
+  const first = prepareGitHubWork(original);
+  const prior = stored(first);
+  const next = prepareGitHubWork({ ...original, event: { ...original.event, delivery_id: 'delivery-2' } });
+  const substituted = stored(next);
+  await assert.rejects(receivePreparedGitHubWork({ prepared: next, call: async (verb, args) => {
+    assert.equal(verb, 'work-board');
+    return args.source ? { position: 'one', threads: [prior], matched: 1 } : { threads: [substituted] };
+  } }), /did not retain the exact source document/);
+});
+
+test('native replay compares the offered document snapshot after nested input mutation', async () => {
+  const prepared = prepareGitHubWork(input());
+  const actual = stored(prepared);
+  prepared.envelope.material.user.login = 'mutated-after-prepare';
+  const receipt = await receivePreparedGitHubWork({ prepared, call: async verb => {
+    assert.equal(verb, 'work-board');
+    return { position: 'one', threads: [actual], matched: 1 };
+  } });
+  assert.equal(receipt.replay, true);
+  assert.equal(readGitHubSourceDocument(actual.opening.sources[1]).material.user.login, 'customer');
+});
+
+test('native replay snapshots retained carrier identity before asynchronous readback', async () => {
+  const prepared = prepareGitHubWork(input());
+  const actual = stored(prepared);
+  const changed = input();
+  changed.event.issue.body = 'Different material';
+  const substituted = prepareGitHubWork(changed).document;
+  await assert.rejects(receivePreparedGitHubWork({ prepared, call: async (verb, args) => {
+    assert.equal(verb, 'work-board');
+    if (!args.source) Object.assign(actual.opening.sources[1], substituted);
+    return { position: 'one', threads: [actual], matched: 1 };
+  } }), /did not retain the exact source document/);
+});
