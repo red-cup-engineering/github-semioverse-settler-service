@@ -4,6 +4,31 @@ import { normalizeGitHubEvent } from './settler.mjs';
 const MEDIA = 'data:application/json;base64,';
 const MAX_MATERIAL_BYTES = 256 * 1024;
 const identityOf = bytes => `ni:///sha-256;${createHash('sha256').update(bytes).digest('base64url')}`;
+const canonical = value => Array.isArray(value) ? value.map(canonical)
+  : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+const equal = (left, right) => JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+
+// Delivery identity belongs to transport. Every other observation field,
+// including material, author, observing actor and visibility, still participates.
+function observationForReplay(envelope) {
+  const { deliveryId, ...source } = envelope.source ?? {};
+  return { ...envelope, source };
+}
+
+function retainedReplayDocument(opening, input, envelope) {
+  for (const document of opening?.sources ?? []) {
+    if (document.kind !== 'github-source-document') continue;
+    const recorded = readGitHubSourceDocument(document);
+    if (!equal(observationForReplay(recorded), observationForReplay(envelope))) continue;
+    const expected = { ...input, sources: input.sources.map(source =>
+      source.kind === 'github-source-document' ? document : source) };
+    // Leave interpretation and scope comparison to the same normalization as
+    // exact replay. Reuse the recorded carrier; never rewrite its bytes or NI.
+    if (Object.entries(expected).filter(([key]) => key !== 'as')
+      .every(([key, value]) => equal(opening[key], value))) return Object.freeze({ ...document });
+  }
+  return undefined;
+}
 
 /** Self-contained source document: the native journal retains the evidence itself.
  * A commitment and a mutable GitHub URL alone cannot recover an earlier edit. */
@@ -58,10 +83,11 @@ export function prepareGitHubWork({ event, opening, binding }) {
 export async function receivePreparedGitHubWork({ prepared, call }) {
   if (typeof call !== 'function') throw new TypeError('authenticated native operation port is required');
   const { envelope, document, input, receiver } = prepared;
-  const canonical = value => Array.isArray(value) ? value.map(canonical)
-    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-  const equal = (left, right) => JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+  // Compare the immutable offered snapshot, not nested objects a caller might
+  // have mutated after prepareGitHubWork captured the source document.
+  const offeredObservation = readGitHubSourceDocument(document);
   let known;
+  let retainedDocument = document;
   let after;
   let position;
   const seen = new Set();
@@ -77,8 +103,11 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
       seen.add(item.id);
       // If native normalization changes a field, let its own opening law judge
       // replay instead of maintaining a second normalization/schema here.
-      if (item.opening && Object.entries(input).filter(([key]) => key !== 'as')
-        .every(([key, value]) => equal(item.opening[key], value))) known = item;
+      const replayDocument = retainedReplayDocument(item.opening, input, offeredObservation);
+      if (replayDocument) {
+        known = item;
+        retainedDocument = replayDocument;
+      }
     }
     if (known || !selected.next) break;
     if (page === 49 || selected.next === after || !seen.has(selected.next)) throw new Error('native source selection exceeded its complete paging bound');
@@ -90,15 +119,17 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
   const readback = await call('work-board', { thread, full: true, limit: 1 });
   const actual = readback?.threads?.find(item => item.id === thread);
   if (!actual?.opening) throw new Error('native admission has no complete receiving readback');
-  const receivedDocument = actual.opening.sources?.find(source => source.kind === document.kind && source.commitment === document.commitment);
-  if (!receivedDocument || receivedDocument.locator !== document.locator) throw new Error('native readback did not retain the exact source document');
+  const receivedDocument = actual.opening.sources?.find(source => source.kind === retainedDocument.kind && source.commitment === retainedDocument.commitment);
+  if (!receivedDocument || receivedDocument.locator !== retainedDocument.locator) throw new Error('native readback did not retain the exact source document');
+  const offeredSourceRetained = receivedDocument.locator === document.locator;
   const routed = actual.home === receiver;
   return Object.freeze({
     state: routed ? 'NATIVE_RECEIVED' : 'NATIVE_RECEIVED_UNROUTED',
     thread,
     providerObjectKey: envelope.providerObjectKey,
     eventKey: envelope.eventKey,
-    sourceDocument: document.commitment,
+    sourceDocument: receivedDocument.commitment,
+    offeredSourceDocument: document.commitment,
     receiver: actual.home ?? null,
     expectedReceiver: receiver,
     postedBy: actual.opening.by,
@@ -106,7 +137,7 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
     standing: actual.standing,
     // Receipt stages stay distinct: no promise, allocation, implementation or
     // customer acceptance is inferred from delivery of a source document.
-    stages: Object.freeze({ sourceRetained: true, nativeAdmitted: true, routed, allocated: false, implemented: false, accepted: false }),
+    stages: Object.freeze({ sourceRetained: true, offeredSourceRetained, nativeAdmitted: true, routed, allocated: false, implemented: false, accepted: false }),
     peerHandoff: admitted.peerHandoff ?? null,
   });
 }
