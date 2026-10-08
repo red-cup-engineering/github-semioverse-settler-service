@@ -69,8 +69,8 @@ test('source selection drift refuses a speculative second opening', async () => 
   await assert.rejects(receivePreparedGitHubWork({ prepared, call: async verb => {
     assert.equal(verb, 'work-board');
     calls++;
-    return calls === 1 ? { position: 'one', threads: [{ id: 'old-source', opening: {} }], next: 'old-source' }
-      : { position: 'changed', threads: [] };
+    return calls === 1 ? { position: 'one', matched: 2, threads: [{ id: 'old-source', opening: {sources:[{locator:prepared.envelope.source.url}]} }], next: 'old-source' }
+      : { position: 'changed', matched: 2, threads: [] };
   } }), /changed while paging/);
 });
 
@@ -173,4 +173,32 @@ test('native replay snapshots retained carrier identity before asynchronous read
     if (!args.source) Object.assign(actual.opening.sources[1], substituted);
     return { position: 'one', threads: [actual], matched: 1 };
   } }), /did not retain the exact source document/);
+});
+
+for (const [label, alter] of [
+  ['missing matched count', page=>{delete page.matched}],
+  ['truncated terminal page', page=>{page.matched=2}],
+  ['unrelated source', page=>{page.threads[0].opening.sources=[]}],
+  ['invalid continuation', page=>{page.matched=2;page.next='other'}],
+]) test(`source selection refuses ${label} before opening`,async()=>{
+  const prepared=prepareGitHubWork(input());let writes=0;
+  const page={position:'one',matched:1,threads:[stored(prepared)]};alter(page);
+  await assert.rejects(receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return page;}}),/source selection/);
+  assert.equal(writes,0);
+});
+test('native set normalization of scope preserves unchanged replay',async()=>{
+ const request=input();request.binding.scope=['service:z','section:services/engineering'];
+ const prepared=prepareGitHubWork(request),actual=stored(prepared);actual.opening.scope=[...actual.opening.scope].sort();let writes=0;
+ const receipt=await receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return {position:'one',matched:1,threads:[actual]};}});
+ assert.equal(receipt.replay,true);assert.equal(writes,0);
+});
+test('same-condition report cannot pretend changed context was retained by corroboration',async()=>{
+ const request=input();request.opening={...request.opening,law:'github-issue-open',subject:request.event.issue.html_url,context:'Original interpretation'};
+ const prior=stored(prepareGitHubWork(request));request.opening.context='Changed interpretation';const prepared=prepareGitHubWork(request);let writes=0;
+ await assert.rejects(receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return {position:'one',matched:1,threads:[prior]};}}),/cannot retain changed interpretation/);
+ assert.equal(writes,0);
+});
+for(const field of ['context','tags'])test(`same-condition report cannot silently remove fixed ${field}`,async()=>{
+ const request=input();request.opening={...request.opening,law:'github-issue-open',subject:request.event.issue.html_url,context:'Original context',tags:['original']};const prior=stored(prepareGitHubWork(request));delete request.opening[field];const prepared=prepareGitHubWork(request);let writes=0;
+ await assert.rejects(receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return {position:'one',matched:1,threads:[prior]};}}),/cannot retain changed interpretation/);assert.equal(writes,0);
 });
