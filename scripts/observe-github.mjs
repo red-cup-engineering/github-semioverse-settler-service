@@ -243,36 +243,49 @@ try {
       const repository = item.repository_url.split('/repos/')[1];
       let checks;
       if (checkPulls && item.pull_request) {
-        const pull = api(`repos/${repository}/pulls/${item.number}`);
-        const head = pull.head.sha;
-        if (!/^[a-f0-9]{40}$/.test(head ?? '')) throw new Error(`Invalid pull head: ${repository}#${item.number}`);
-        // Owner search can include public repositories absent from user/repos.
-        // Only repository-scoped reads promise the separately selected numeric identity.
-        const repositoryId = repositoryScope.length ? repositoryIds.get(repository.toLowerCase()) : undefined;
-        if (repositoryScope.length && repositoryId === undefined)
-          throw new Error(`Pull repository is outside the selected scope: ${repository}`);
-        const target = pullTarget(pull, repository, repositoryId);
-        const beforeTarget = targetBranch(target);
-        const status = combinedStatus(repository, head);
-        const runs = checkRuns(repository, head);
-        const reviews = pullReviews(repository, item.number, head);
-        const current = api(`repos/${repository}/pulls/${item.number}`);
-        if (current.head?.sha !== head) throw new Error(`Pull head changed during observation: ${repository}#${item.number}`);
-        if (JSON.stringify(pullTarget(current, repository, repositoryId)) !== JSON.stringify(target))
-          throw new Error(`Pull target changed during observation: ${repository}#${item.number}`);
-        const currentTarget = targetBranch(target);
-        if (currentTarget.head !== beforeTarget.head)
-          throw new Error(`Target branch changed during observation: ${repository}#${item.number}`);
-        if (![true, false, null].includes(current.mergeable) || typeof current.mergeable_state !== 'string' || !current.mergeable_state ||
-            !Object.hasOwn(current, 'auto_merge') || !(current.auto_merge === null || typeof current.auto_merge === 'object' && !Array.isArray(current.auto_merge)))
-          throw new Error(`Incomplete pull mergeability facts: ${repository}#${item.number}`);
-        checks = { head, draft: current.draft, merged: current.merged, mergeable: current.mergeable,
-          mergeableState: current.mergeable_state, autoMerge: current.auto_merge,
-          baseSnapshot: { repository, ref: current.base.ref, head: current.base.sha }, targetBranch: currentTarget,
-          status: status.state, statuses: status.statuses.map(s => ({ context: s.context, state: s.state, url: s.target_url })),
-          checkRunFilter: 'latest', checkSuiteLimit: 1000,
-          runs: runs.map(run => ({ id: run.id, head: run.head_sha, name: run.name, status: run.status, conclusion: run.conclusion, url: run.html_url })),
-          reviews };
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const pull = api(`repos/${repository}/pulls/${item.number}`);
+            const head = pull.head.sha;
+            if (!/^[a-f0-9]{40}$/.test(head ?? '')) throw new Error(`Invalid pull head: ${repository}#${item.number}`);
+            // Owner search can include public repositories absent from user/repos.
+            // Only repository-scoped reads promise the separately selected numeric identity.
+            const repositoryId = repositoryScope.length ? repositoryIds.get(repository.toLowerCase()) : undefined;
+            if (repositoryScope.length && repositoryId === undefined)
+              throw new Error(`Pull repository is outside the selected scope: ${repository}`);
+            const target = pullTarget(pull, repository, repositoryId);
+            const beforeTarget = targetBranch(target);
+            const status = combinedStatus(repository, head);
+            const runs = checkRuns(repository, head);
+            const reviews = pullReviews(repository, item.number, head);
+            const current = api(`repos/${repository}/pulls/${item.number}`);
+            if (current.head?.sha !== head) throw new Error(`Pull head changed during observation: ${repository}#${item.number}`);
+            if (JSON.stringify(pullTarget(current, repository, repositoryId)) !== JSON.stringify(target))
+              throw new Error(`Pull target changed during observation: ${repository}#${item.number}`);
+            const currentTarget = targetBranch(target);
+            if (currentTarget.head !== beforeTarget.head)
+              throw new Error(`Target branch changed during observation: ${repository}#${item.number}`);
+            if (![true, false, null].includes(current.mergeable) || typeof current.mergeable_state !== 'string' || !current.mergeable_state ||
+                !Object.hasOwn(current, 'auto_merge') || !(current.auto_merge === null || typeof current.auto_merge === 'object' && !Array.isArray(current.auto_merge)))
+              throw new Error(`Incomplete pull mergeability facts: ${repository}#${item.number}`);
+            checks = { head, draft: current.draft, merged: current.merged, mergeable: current.mergeable,
+              mergeableState: current.mergeable_state, autoMerge: current.auto_merge,
+              baseSnapshot: { repository, ref: current.base.ref, head: current.base.sha }, targetBranch: currentTarget,
+              status: status.state, statuses: status.statuses.map(s => ({ context: s.context, state: s.state, url: s.target_url })),
+              checkRunFilter: 'latest', checkSuiteLimit: 1000,
+              runs: runs.map(run => ({ id: run.id, head: run.head_sha, name: run.name, status: run.status, conclusion: run.conclusion, url: run.html_url })),
+              reviews };
+            break;
+          } catch (error) {
+            // A merge of other work can move this same target without changing
+            // the PR. Discard the whole check reading, retain the obstruction,
+            // then read it again. Never reuse checks from the interrupted pass.
+            // PR head/target identity, quota and invalid evidence still fail.
+            if (error.message !== `Target branch changed during observation: ${repository}#${item.number}` || attempt === 3) throw error;
+            emit({ kind: 'github.pull-observation-retry', repository, number: item.number, attempt,
+              reason: error.message, nextAttempt: attempt + 1 });
+          }
+        }
       }
       if (!summaryOnly || checks) emit({ kind: item.pull_request ? 'github.pull' : 'github.issue', repository,
         number: item.number, id: item.node_id, url: item.html_url, title: item.title, state: item.state, closedAt: item.closed_at ?? null,

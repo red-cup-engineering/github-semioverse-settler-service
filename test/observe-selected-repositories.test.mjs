@@ -45,7 +45,7 @@ if(path==='repos/'+repository+'/pulls/34'){
 }
 if(path==='repos/'+repository+'/branches/main'||path==='repos/'+repository+'/branches/release%2Fcurrent'){
  if(mode==='target-permission')refuse('gh: HTTP 403');
- out({name:mode==='slash-target'?'release/current':'main',commit:{sha:mode==='target-moved'&&attempt>1?'b'.repeat(40):mode==='bad-target'?'not-a-commit':'${target}'}});
+ out({name:mode==='slash-target'?'release/current':'main',commit:{sha:mode==='target-unstable'?(attempt%2?'a':'b').repeat(40):mode==='target-moved'&&attempt>1?'b'.repeat(40):mode==='bad-target'?'not-a-commit':'${target}'}});
 }
 if(path.includes('/commits/${head}/status?'))out({state:'pending',total_count:0,statuses:[]});
 if(path.includes('/commits/${head}/check-runs?'))out({total_count:1,check_runs:[{id:113282900315,head_sha:'${head}',name:'release',status:'completed',conclusion:'failure',html_url:'https://github.com/'+repository+'/actions/runs/37768794530'}]});
@@ -114,7 +114,7 @@ test('repository issue pagination and closed observations remain complete', () =
   assert.ok(result.calls.some(path => path.includes('/issues?state=open') && path.endsWith('page=2')));
   assert.ok(result.calls.some(path => path.includes('/issues?state=closed') && path.includes('since=')));
 });
-for (const mode of ['renamed', 'repo-permission', 'wrong-item', 'duplicate-page', 'target-moved', 'target-permission', 'bad-target', 'retargeted', 'missing-facts', 'wrong-target-id', 'replaced-target-id']) test(`${mode} refuses complete selected-repository coverage`, () => {
+for (const mode of ['renamed', 'repo-permission', 'wrong-item', 'duplicate-page', 'target-unstable', 'target-permission', 'bad-target', 'retargeted', 'missing-facts', 'wrong-target-id', 'replaced-target-id']) test(`${mode} refuses complete selected-repository coverage`, () => {
   const result = observe(mode);
   assert.equal(result.status, 1);
   assert.equal(result.rows.at(-1).kind, 'github.coverage-incomplete');
@@ -154,4 +154,31 @@ test('mixed owner and repository scopes refuse before provider reads', () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /different coverage scopes/);
   assert.deepEqual(result.calls, []);
+});
+
+test('one moving target is reread completely before coverage, with interrupted evidence retained', () => {
+  const result = observe('target-moved');
+  assert.equal(result.status, 0, result.stderr);
+  const retries = result.rows.filter(row => row.kind === 'github.pull-observation-retry');
+  assert.equal(retries.length, 1);
+  assert.equal(retries[0].attempt, 1);
+  const checks = result.rows.find(row => row.kind === 'github.pull').checks;
+  assert.equal(checks.targetBranch.head, 'b'.repeat(40));
+  assert.equal(checks.head, head);
+  assert.equal(checks.mergeable, false);
+  assert.equal(checks.draft, true);
+  assert.equal(checks.runs[0].conclusion, 'failure');
+  assert.equal(result.calls.filter(path => path.endsWith('/branches/main')).length, 4);
+  assert.equal(result.calls.filter(path => path.includes('/check-runs?')).length, 2);
+  assert.equal(result.calls.filter(path => path.includes('/status?')).length, 2);
+  assert.equal(result.calls.filter(path => path.includes('/reviews?')).length, 2);
+  assert.equal(result.rows.at(-1).kind, 'github.coverage-complete');
+});
+test('continuously changing targets stop at three complete attempts without partial pull output', () => {
+  const result = observe('target-unstable');
+  assert.equal(result.status, 1);
+  assert.equal(result.rows.filter(row => row.kind === 'github.pull-observation-retry').length, 2);
+  assert.equal(result.calls.filter(path => path.endsWith('/branches/main')).length, 6);
+  assert.equal(result.rows.some(row => row.kind === 'github.pull'), false);
+  assert.equal(result.rows.at(-1).kind, 'github.coverage-incomplete');
 });
