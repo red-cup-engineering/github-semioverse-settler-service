@@ -27,6 +27,12 @@ prints coverage counts only. `--pull-checks` additionally reads the exact PR
 head, commit statuses, and check runs. Fetch the issue/PR, comments, and reviews
 at their returned URLs when evaluating or acting on an obligation.
 
+`--branches` also paginates every selected repository's branch heads and
+compares each distinct head with the exact observed default commit. Its rows
+retain ahead/behind counts and archived status; unmerged commits require
+capability and source review, not automatic merging. Completion explicitly
+records `branchHeads: true`; an issue/PR-only scan does not cover branches.
+
 `--closed-since YYYY-MM-DDTHH:MM:SSZ` adds issues and PRs whose closed state
 changed since the supplied UTC boundary, while still observing every open
 item. This catches recently merged, rejected or closed work that an open-only
