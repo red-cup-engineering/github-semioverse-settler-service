@@ -6,12 +6,13 @@ import { execFileSync } from 'node:child_process';
 const args = process.argv.slice(2);
 const summaryOnly = args.includes('--summary');
 const checkPulls = args.includes('--pull-checks');
+const checkBranches = args.includes('--branches');
 const explicitOwners = [];
 let closedSince;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--owner' && /^[A-Za-z0-9-]+$/.test(args[i + 1] ?? '')) explicitOwners.push(args[++i]);
   else if (args[i] === '--closed-since' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(args[i + 1] ?? '') && Number.isFinite(Date.parse(args[i + 1]))) closedSince = args[++i];
-  else if (!['--summary', '--pull-checks'].includes(args[i])) throw new TypeError(`Unknown argument: ${args[i]}`);
+  else if (!['--summary', '--pull-checks', '--branches'].includes(args[i])) throw new TypeError(`Unknown argument: ${args[i]}`);
 }
 const PAGE_SIZE = 30;
 function api(path) {
@@ -97,6 +98,36 @@ function combinedStatus(repository, head) {
   throw new Error(`Commit status bound reached; coverage is incomplete: ${repository}@${head}`);
 }
 const emit = value => process.stdout.write(`${JSON.stringify(value)}\n`);
+function observeBranches(repo) {
+  const branches = pages(`repos/${repo.full_name}/branches`);
+  const names = new Set();
+  for (const branch of branches) {
+    if (typeof branch.name !== 'string' || !branch.name || names.has(branch.name) ||
+        !/^[a-f0-9]{40}$/.test(branch.commit?.sha ?? '')) throw new Error(`Invalid or repeated branch: ${repo.full_name}`);
+    names.add(branch.name);
+  }
+  const base = branches.find(branch => branch.name === repo.default_branch);
+  if (!base && branches.length) throw new Error(`Default branch missing from observation: ${repo.full_name}`);
+  const observations = branches.map(branch => {
+    let comparison = { status: 'identical', ahead: 0, behind: 0 };
+    if (branch.commit.sha !== base.commit.sha) {
+      // Compare immutable commits, never moving branch names. One commit in the
+      // response is sufficient for provider counts; no patch/file copy is kept.
+      const value = api(`repos/${repo.full_name}/compare/${base.commit.sha}...${branch.commit.sha}?per_page=1`);
+      if (!['ahead', 'behind', 'diverged', 'identical'].includes(value.status) ||
+          !Number.isSafeInteger(value.ahead_by) || value.ahead_by < 0 ||
+          !Number.isSafeInteger(value.behind_by) || value.behind_by < 0 ||
+          value.base_commit?.sha !== base.commit.sha)
+        throw new Error(`Incomplete branch comparison: ${repo.full_name}@${branch.commit.sha}`);
+      comparison = { status: value.status, ahead: value.ahead_by, behind: value.behind_by };
+    }
+    return { name: branch.name, head: branch.commit.sha, protected: branch.protected === true, ...comparison };
+  });
+  emit({ kind: 'github.repository-branches', repository: repo.full_name,
+    archived: repo.archived === true, defaultBranch: repo.default_branch ?? null,
+    defaultHead: base?.commit.sha ?? null, branches: observations });
+  return observations.length;
+}
 try {
   const user = api('user');
   const owners = [...new Set(explicitOwners.length ? explicitOwners : [user.login, ...pages('user/orgs').map(org => org.login)])];
@@ -105,6 +136,8 @@ try {
   if (ids.size !== repositories.length) throw new Error('Repository listing changed during pagination; rerun');
   const selected = repositories.filter(repo => owners.includes(repo.owner.login));
   const stats = [];
+  let branchCount = 0;
+  if (checkBranches) for (const repo of selected) branchCount += observeBranches(repo);
   // A complete marker is emitted only AFTER every selected owner's pages arrive.
   // Earlier rows may be useful, but a failed process is never full coverage.
   for (const owner of owners) {
@@ -142,7 +175,8 @@ try {
   emit({ kind: 'github.coverage-complete', observedAt: new Date().toISOString(), principal: user.login,
     accessibleRepositories: repositories.length, repositories: selected.length, owners: stats,
     unselectedOwners: [...new Set(repositories.filter(repo => !owners.includes(repo.owner.login)).map(repo => repo.owner.login))],
-    pullChecks: checkPulls, closedSince: closedSince ?? null });
+    pullChecks: checkPulls, branchHeads: checkBranches,
+    ...(checkBranches ? { branches: branchCount } : {}), closedSince: closedSince ?? null });
 } catch (error) {
   emit({ kind: 'github.coverage-incomplete', reason: error.message });
   process.exitCode = 1;
