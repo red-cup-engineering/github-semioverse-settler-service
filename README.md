@@ -27,6 +27,26 @@ prints coverage counts only. `--pull-checks` additionally reads the exact PR
 head, commit statuses, check runs, and review facts. Fetch the issue/PR, comments, and reviews
 at their returned URLs when evaluating or acting on an obligation.
 
+For a bounded assignment, repeat `--repository OWNER/NAME` instead of `--owner`.
+This reads the authenticated principal and exactly those repository records and
+issue endpoints, without listing accessible repositories, organizations, or
+searching whole owner namespaces. Names are case-insensitively deduplicated;
+an unexpected repository identity, wrong-repository item, repeated issue identity
+(including an issue transferred between selected repositories during the scan),
+or failed page refuses complete coverage. Owner and repository selectors cannot
+be mixed. For example, from this service directory:
+
+```sh
+node scripts/observe-github.mjs --repository emsenn/cold-red-gate --pull-checks
+```
+
+Repository-scoped completion and owner-count rows explicitly name
+`scope: "selected-repositories"`. Completion retains the selected repository IDs
+and observed names, and deliberately omits `accessibleRepositories`: this run
+did not enumerate the account's wider estate. Existing owner-scoped coverage
+remains an owner enumeration. `--branches` and `--closed-since` operate within
+the selected scope in either mode.
+
 `--branches` also paginates every selected repository's branch heads and
 compares each distinct head with the exact observed default commit. Its rows
 retain ahead/behind counts and archived status; unmerged commits require
@@ -41,6 +61,28 @@ dismissed reviews and pending reviews remain visible; no approval, independence,
 required-review satisfaction or merge authority is inferred. The original PR is
 read again after collection; a moved head refuses complete evidence. Completion
 records `pullReviews: true` only when this observation was selected.
+
+`--pull-checks` also preserves the provider's `mergeableState` and `autoMerge`
+facts. `baseSnapshot` is the base commit returned by the PR API; it is never
+presented as the current branch head. `targetBranch` is independently read from
+the PR's named target repository and branch before and after collection. A moved
+head, changed target, moved target branch, malformed branch response, or missing
+mergeability fact refuses complete evidence. Branch names are encoded as one API
+path segment. In repository-scoped mode, both PR reads must retain the selected
+repository's numeric ID; the same owner/name on a different repository cannot
+reuse that identity. Owner search retains its existing ability to observe public
+repositories outside the authenticated account's membership inventory and does
+not claim that separately selected numeric identity. The target may be a
+non-default branch.
+
+These are observations, not scheduling or merge instructions. Unknown
+mergeability stays unknown; a draft, dirty branch, failed check, absent auto-merge,
+or old update timestamp does not by itself mean abandoned work. Preserve an
+owner's deliberate hold and unresolved prerequisites. Before intervention, read
+the current source discussion and receiving instructions. The observer neither
+posts a comment nor dispatches Codex, creates a timer, widens an audience, or
+authorizes a merge. Two equal endpoint observations do not prove there was no
+intervening movement or change after the observation.
 
 This is bounded provider enumeration, not an atomic snapshot or an action-time
 integration decision. Same-head reviews and checks can change after they are
@@ -154,3 +196,4 @@ The next runtime slice still owns:
 - downstream semantic projection/readback beyond raw arrival admission.
 
 The focused service tests cover stable provider identity across repository rename, exact PR-head revision binding, persistent replay suppression, and the MetroPlat root-admission contract.
+
