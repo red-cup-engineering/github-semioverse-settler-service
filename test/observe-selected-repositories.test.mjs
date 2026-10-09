@@ -38,14 +38,19 @@ if(path.startsWith('repos/'+repository+'/issues?')){
  out(mode==='transferred'?[{...pull,pull_request:undefined}]:[pull]);
 }
 if(path==='repos/'+repository+'/pulls/34'){
- const value={head:{sha:'${head}'},base:{ref:mode==='slash-target'?'release/current':mode==='retargeted'&&attempt>1?'other':'main',sha:'${snapshot}',repo:{id:mode==='wrong-target-id'||mode==='replaced-target-id'&&attempt>1?2:1408796038,full_name:repository}},draft:true,merged:false,mergeable:mode==='unknown'?null:false,mergeable_state:mode==='unknown'?'unknown':'dirty',auto_merge:null};
+ const value={head:{sha:'${head}'},base:{ref:['slash-target','target-deleted','target-false-absence','target-list-permission'].includes(mode)?'release/current':mode==='retargeted'&&attempt>1?'other':'main',sha:'${snapshot}',repo:{id:mode==='wrong-target-id'||mode==='replaced-target-id'&&attempt>1?2:1408796038,full_name:repository}},draft:true,merged:false,mergeable:mode==='unknown'?null:false,mergeable_state:mode==='unknown'?'unknown':'dirty',auto_merge:null};
  if(mode==='missing-facts')delete value.auto_merge;
  if(mode==='auto-merge')value.auto_merge={merge_method:'squash',enabled_by:{id:111507,login:'emsenn'}};
  out(value);
 }
 if(path==='repos/'+repository+'/branches/main'||path==='repos/'+repository+'/branches/release%2Fcurrent'){
  if(mode==='target-permission')refuse('gh: HTTP 403');
- out({name:mode==='slash-target'?'release/current':'main',commit:{sha:mode==='target-unstable'?(attempt%2?'a':'b').repeat(40):mode==='target-moved'&&attempt>1?'b'.repeat(40):mode==='bad-target'?'not-a-commit':'${target}'}});
+ if(['target-deleted','target-false-absence','target-list-permission'].includes(mode))refuse('gh: Branch not found (HTTP 404)');
+ out({name:['slash-target','target-deleted','target-false-absence','target-list-permission'].includes(mode)?'release/current':'main',commit:{sha:mode==='target-unstable'?(attempt%2?'a':'b').repeat(40):mode==='target-moved'&&attempt>1?'b'.repeat(40):mode==='bad-target'?'not-a-commit':'${target}'}});
+}
+if(path.startsWith('repos/'+repository+'/branches?')){
+ if(mode==='target-list-permission')refuse('gh: HTTP 403');
+ out([{name:'main',commit:{sha:'${target}'}},...(mode==='target-false-absence'?[{name:'release/current',commit:{sha:'${target}'}}]:[])]);
 }
 if(path.includes('/commits/${head}/status?'))out({state:'pending',total_count:0,statuses:[]});
 if(path.includes('/commits/${head}/check-runs?'))out({total_count:1,check_runs:[{id:113282900315,head_sha:'${head}',name:'release',status:'completed',conclusion:'failure',html_url:'https://github.com/'+repository+'/actions/runs/37768794530'}]});
@@ -180,5 +185,22 @@ test('continuously changing targets stop at three complete attempts without part
   assert.equal(result.rows.filter(row => row.kind === 'github.pull-observation-retry').length, 2);
   assert.equal(result.calls.filter(path => path.endsWith('/branches/main')).length, 6);
   assert.equal(result.rows.some(row => row.kind === 'github.pull'), false);
+  assert.equal(result.rows.at(-1).kind, 'github.coverage-incomplete');
+});
+
+test('a retired target retains exact-head checks and verified absence without inventing merge delivery', () => {
+  const result = observe('target-deleted');
+  assert.equal(result.status, 0, result.stderr);
+  const checks = result.rows.find(row => row.kind === 'github.pull').checks;
+  assert.deepEqual(checks.targetBranch, { repository: 'emsenn/cold-red-gate', name: 'release/current', head: null, state: 'absent', evidence: 'fully-paginated-branches' });
+  assert.equal(checks.head, head);
+  assert.equal(checks.merged, false);
+  assert.equal(checks.runs[0].conclusion, 'failure');
+  assert.equal(result.rows.at(-1).kind, 'github.coverage-complete');
+  assert.equal(result.calls.filter(path => path.includes('/branches?')).length, 2);
+});
+for (const mode of ['target-false-absence', 'target-list-permission']) test(mode+' still refuses coverage', () => {
+  const result = observe(mode);
+  assert.notEqual(result.status, 0);
   assert.equal(result.rows.at(-1).kind, 'github.coverage-incomplete');
 });
