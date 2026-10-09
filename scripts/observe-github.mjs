@@ -97,6 +97,44 @@ function combinedStatus(repository, head) {
   }
   throw new Error(`Commit status bound reached; coverage is incomplete: ${repository}@${head}`);
 }
+function checkRuns(repository, head) {
+  const runs = [];
+  const seen = new Set();
+  let expected;
+  for (let page = 1; page <= 1000; page++) {
+    const result = api(`repos/${repository}/commits/${head}/check-runs?per_page=${PAGE_SIZE}&page=${page}`);
+    if (!Number.isSafeInteger(result.total_count) || result.total_count < 0 || !Array.isArray(result.check_runs))
+      throw new Error(`Incomplete check runs: ${repository}@${head}`);
+    if (expected !== undefined && result.total_count !== expected)
+      throw new Error(`Check runs changed during pagination: ${repository}@${head}`);
+    expected = result.total_count;
+    for (const run of result.check_runs) {
+      if (!Number.isSafeInteger(run.id) || run.id <= 0 || seen.has(run.id) || run.head_sha !== head)
+        throw new Error(`Repeated, missing or wrong-head check identity: ${repository}@${head}`);
+      seen.add(run.id); runs.push(run);
+    }
+    if (runs.length === expected) return runs;
+    if (runs.length > expected || result.check_runs.length < PAGE_SIZE)
+      throw new Error(`Premature or excessive check runs: ${repository}@${head}`);
+  }
+  throw new Error(`Check-run bound reached; coverage is incomplete: ${repository}@${head}`);
+}
+function pullReviews(repository, number, head) {
+  const reviews = pages(`repos/${repository}/pulls/${number}/reviews`);
+  const seen = new Set();
+  return reviews.map(review => {
+    if (!Number.isSafeInteger(review.id) || review.id <= 0 || seen.has(review.id) ||
+        !['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED', 'PENDING'].includes(review.state) ||
+        (review.commit_id !== null && !/^[a-f0-9]{40}$/.test(review.commit_id ?? '')))
+      throw new Error(`Invalid or repeated review identity: ${repository}#${number}`);
+    seen.add(review.id);
+    // These are provider facts, not a reduction to approval or merge authority.
+    // Keep stale, dismissed and pending reviews instead of selecting a verdict.
+    return { id: review.id, author: review.user?.login ?? null, authorId: review.user?.id ?? null,
+      state: review.state, commit: review.commit_id, matchesHead: review.commit_id === head,
+      submittedAt: review.submitted_at ?? null, url: review.html_url ?? null };
+  });
+}
 const emit = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 function observeBranches(repo) {
   const branches = pages(`repos/${repo.full_name}/branches`);
@@ -172,11 +210,17 @@ try {
       if (checkPulls && item.pull_request) {
         const pull = api(`repos/${repository}/pulls/${item.number}`);
         const head = pull.head.sha;
+        if (!/^[a-f0-9]{40}$/.test(head ?? '')) throw new Error(`Invalid pull head: ${repository}#${item.number}`);
         const status = combinedStatus(repository, head);
-        const runs = pages(`repos/${repository}/commits/${head}/check-runs`, 'check_runs');
-        checks = { head, draft: pull.draft, merged: pull.merged, mergeable: pull.mergeable,
+        const runs = checkRuns(repository, head);
+        const reviews = pullReviews(repository, item.number, head);
+        const current = api(`repos/${repository}/pulls/${item.number}`);
+        if (current.head?.sha !== head) throw new Error(`Pull head changed during observation: ${repository}#${item.number}`);
+        checks = { head, draft: current.draft, merged: current.merged, mergeable: current.mergeable,
           status: status.state, statuses: status.statuses.map(s => ({ context: s.context, state: s.state, url: s.target_url })),
-          runs: runs.map(run => ({ name: run.name, status: run.status, conclusion: run.conclusion, url: run.html_url })) };
+          checkRunFilter: 'latest', checkSuiteLimit: 1000,
+          runs: runs.map(run => ({ id: run.id, head: run.head_sha, name: run.name, status: run.status, conclusion: run.conclusion, url: run.html_url })),
+          reviews };
       }
       if (!summaryOnly || checks) emit({ kind: item.pull_request ? 'github.pull' : 'github.issue', repository,
         number: item.number, id: item.node_id, url: item.html_url, title: item.title, state: item.state, closedAt: item.closed_at ?? null,
@@ -186,7 +230,7 @@ try {
   emit({ kind: 'github.coverage-complete', observedAt: new Date().toISOString(), principal: user.login,
     accessibleRepositories: repositories.length, repositories: selected.length, owners: stats,
     unselectedOwners: [...new Set(repositories.filter(repo => !owners.includes(repo.owner.login)).map(repo => repo.owner.login))],
-    pullChecks: checkPulls, branchHeads: checkBranches,
+    pullChecks: checkPulls, pullReviews: checkPulls, branchHeads: checkBranches,
     ...(checkBranches ? { branches: branchCount } : {}), closedSince: closedSince ?? null });
 } catch (error) {
   emit({ kind: 'github.coverage-incomplete', reason: error.message });

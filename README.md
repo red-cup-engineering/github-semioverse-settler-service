@@ -24,7 +24,7 @@ current account, its organizations, and accessible repositories from paginated
 GitHub APIs, then reads every open issue and PR in those owner namespaces.
 `--owner NAME` may be repeated to select explicit namespaces; `--summary`
 prints coverage counts only. `--pull-checks` additionally reads the exact PR
-head, commit statuses, and check runs. Fetch the issue/PR, comments, and reviews
+head, commit statuses, check runs, and review facts. Fetch the issue/PR, comments, and reviews
 at their returned URLs when evaluating or acting on an obligation.
 
 `--branches` also paginates every selected repository's branch heads and
@@ -32,6 +32,23 @@ compares each distinct head with the exact observed default commit. Its rows
 retain ahead/behind counts and archived status; unmerged commits require
 capability and source review, not automatic merging. Completion explicitly
 records `branchHeads: true`; an issue/PR-only scan does not cover branches.
+
+With `--pull-checks`, check-run pages must retain a stable total count, unique
+positive identities and the exact selected commit. Every review page is read;
+rows preserve review identity, reviewer identity, state, source commit, submitted
+time and locator. `matchesHead` reports commit equality only. Stale approvals,
+dismissed reviews and pending reviews remain visible; no approval, independence,
+required-review satisfaction or merge authority is inferred. The original PR is
+read again after collection; a moved head refuses complete evidence. Completion
+records `pullReviews: true` only when this observation was selected.
+
+This is bounded provider enumeration, not an atomic snapshot or an action-time
+integration decision. Same-head reviews and checks can change after they are
+read. Existing source review and receiving rules still govern the next action.
+The existing check-run endpoint uses GitHub's `latest` filter and covers at most
+the 1,000 most recent check suites. Rows name that provider scope explicitly as
+`checkRunFilter` and `checkSuiteLimit`; completeness does not claim older suites
+or all historical reruns. Reviews use the provider's chronological list.
 
 `--closed-since YYYY-MM-DDTHH:MM:SSZ` adds issues and PRs whose closed state
 changed since the supplied UTC boundary, while still observing every open
