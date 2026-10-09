@@ -32,7 +32,19 @@ if(path.startsWith('search/issues?')){
  out({total_count:path.includes('is%3Aclosed')?0:1,incomplete_results:false,items:path.includes('is%3Aclosed')?[]:[item]});
 }
 if(path.startsWith('repos/emsenn/example/issues?'))out(path.includes('state=closed')?[]:[item]);
-if(path==='repos/emsenn/example/pulls/1')out({head:{sha:'${head}'},draft:false,merged:false,mergeable:true});
+if(path==='repos/emsenn/example/pulls/1')out({head:{sha:mode==='head-moved'&&attempt>1?'b'.repeat(40):'${head}'},draft:false,merged:false,mergeable:true});
+if(path.startsWith('repos/emsenn/example/pulls/1/reviews?')){
+ const page=Number(new URL('https://api.github.test/'+path).searchParams.get('page'));
+ if(mode==='review-permission')refuse('gh: Resource not accessible by integration (HTTP 403)');
+ const states=['APPROVED','DISMISSED','CHANGES_REQUESTED','COMMENTED','PENDING'];
+ const all=Array.from({length:31},(_,i)=>({id:100+i,user:{id:10+i,login:'reviewer-'+i},state:states[i%5],commit_id:i%2?'b'.repeat(40):'${head}',submitted_at:i%5===4?null:'2026-10-07T00:00:00Z',html_url:'https://github.com/emsenn/example/pull/1#pullrequestreview-'+(100+i)}));
+ if(mode==='review-duplicate')all[30]=all[0];
+ if(mode==='review-malformed')all[0].id=null;
+ if(mode==='review-state')all[0].state='UNKNOWN';
+ if(mode==='review-null'){all[0].user=null;all[0].commit_id=null;}
+ if(mode==='empty')out([]);
+ out(all.slice((page-1)*30,page*30));
+}
 if(path.includes('/commits/${head}/status?')){
  const page=Number(new URL('https://api.github.test/'+path).searchParams.get('page'));
  if(page===2 && (mode==='exhausted'||mode==='transient'&&attempt===1))refuse('gh: HTTP 500');
@@ -41,7 +53,13 @@ if(path.includes('/commits/${head}/status?')){
 }
 if(path.includes('/commits/${head}/check-runs?')){
  if(mode==='permission')refuse('gh: Resource not accessible by integration (HTTP 403)');
- const page=Number(new URL('https://api.github.test/'+path).searchParams.get('page'));const all=Array.from({length:31},(_,id)=>({id:id+1,name:'check-'+id,status:'completed',conclusion:'success',html_url:null}));out({check_runs:all.slice((page-1)*30,page*30)});
+ const page=Number(new URL('https://api.github.test/'+path).searchParams.get('page'));const all=Array.from({length:31},(_,id)=>({id:id+1,head_sha:'${head}',name:'check-'+id,status:'completed',conclusion:'success',html_url:null}));
+ if(mode==='check-duplicate')all[30]=all[0];
+ if(mode==='check-head')all[30].head_sha='b'.repeat(40);
+ if(mode==='check-malformed')all[0].id=null;
+ if(mode==='empty')out({total_count:0,check_runs:[]});
+ if(mode==='check-excess')out({total_count:0,check_runs:all.slice(0,1)});
+ out({total_count:mode==='check-count'&&page===2?32:mode==='check-premature'?32:31,check_runs:all.slice((page-1)*30,page*30)});
 }
 refuse('unexpected provider path '+path);
 `;
@@ -70,6 +88,50 @@ test('a transient provider failure retains the same PR head and all status/check
   assert.equal(pull.checks.statuses.length, 31);
   assert.equal(pull.checks.runs.length, 31);
   assert.equal(result.rows.at(-1).kind, 'github.coverage-complete');
+});
+test('review facts retain source identities, stale heads, dismissals and pending state without deriving approval', () => {
+  const result = observe('reviews');
+  assert.equal(result.status, 0, result.stderr);
+  const checks = result.rows.find(row => row.kind === 'github.pull').checks;
+  assert.equal(checks.reviews.length, 31);
+  assert.deepEqual(checks.reviews[0], { id: 100, author: 'reviewer-0', authorId: 10,
+    state: 'APPROVED', commit: head, matchesHead: true, submittedAt: '2026-10-07T00:00:00Z',
+    url: 'https://github.com/emsenn/example/pull/1#pullrequestreview-100' });
+  assert.equal(checks.reviews[1].state, 'DISMISSED');
+  assert.equal(checks.reviews[1].matchesHead, false);
+  assert.equal(checks.reviews[4].state, 'PENDING');
+  assert.equal(checks.reviews[4].submittedAt, null);
+  assert.equal(checks.checkRunFilter, 'latest');
+  assert.equal(checks.checkSuiteLimit, 1000);
+  assert.equal(Object.hasOwn(checks, 'approved'), false);
+  assert.equal(result.calls['repos/emsenn/example/pulls/1/reviews?per_page=30&page=2'], 1);
+  assert.equal(result.calls['repos/emsenn/example/pulls/1'], 2);
+  assert.equal(result.rows.at(-1).pullReviews, true);
+});
+for (const mode of ['check-count', 'check-premature', 'check-duplicate', 'check-head', 'check-malformed', 'check-excess',
+  'review-duplicate', 'review-malformed', 'review-state', 'review-permission', 'head-moved']) test(`${mode} cannot supply complete review/check evidence`, () => {
+  const result = observe(mode);
+  assert.equal(result.status, 1);
+  assert.equal(result.rows.at(-1).kind, 'github.coverage-incomplete');
+  assert.equal(result.rows.some(row => row.kind === 'github.coverage-complete'), false);
+  assert.equal(result.rows.some(row => row.kind === 'github.pull'), false);
+});
+test('empty provider evidence stays empty rather than becoming approval', () => {
+  const result = observe('empty');
+  assert.equal(result.status, 0, result.stderr);
+  const checks = result.rows.find(row => row.kind === 'github.pull').checks;
+  assert.deepEqual(checks.runs, []);
+  assert.deepEqual(checks.reviews, []);
+  assert.equal(Object.hasOwn(checks, 'approved'), false);
+});
+test('absent review author and commit stay unknown, never exact-head approval', () => {
+  const result = observe('review-null');
+  assert.equal(result.status, 0, result.stderr);
+  const review = result.rows.find(row => row.kind === 'github.pull').checks.reviews[0];
+  assert.equal(review.author, null);
+  assert.equal(review.authorId, null);
+  assert.equal(review.commit, null);
+  assert.equal(review.matchesHead, false);
 });
 test('server failure exhaustion remains an incomplete observation after three attempts', () => {
   const result = observe('exhausted');
