@@ -96,7 +96,27 @@ function pullTarget(pull, repository, repositoryId) {
   return { repository, name: pull.base.ref };
 }
 function targetBranch(target) {
-  const branch = api(`repos/${target.repository}/branches/${encodeURIComponent(target.name)}`);
+  let branch;
+  try {
+    branch = api(`repos/${target.repository}/branches/${encodeURIComponent(target.name)}`);
+  } catch (error) {
+    const diagnostic = String(error.stderr ?? error.message);
+    if (!diagnostic.includes('Branch not found (HTTP 404)')) throw error;
+    // A retired PR target is a fact, not a lost repository or successful merge.
+    // Independently establish repository access and a complete branch reading.
+    const repository = api(`repos/${target.repository}`);
+    if (repository.full_name?.toLowerCase() !== target.repository.toLowerCase() ||
+        !Number.isSafeInteger(repository.id) || typeof repository.default_branch !== 'string') throw error;
+    const branches = pages(`repos/${target.repository}/branches`);
+    const names = new Set();
+    for (const row of branches) {
+      if (typeof row.name !== 'string' || !row.name || names.has(row.name) || !/^[a-f0-9]{40}$/.test(row.commit?.sha ?? ''))
+        throw new Error(`Invalid target branch absence evidence: ${target.repository}`);
+      names.add(row.name);
+    }
+    if (!names.has(repository.default_branch) || names.has(target.name)) throw error;
+    return { ...target, head: null, state: 'absent', evidence: 'fully-paginated-branches' };
+  }
   if (branch.name !== target.name || !/^[a-f0-9]{40}$/.test(branch.commit?.sha ?? ''))
     throw new Error(`Invalid target branch observation: ${target.repository}:${target.name}`);
   return { ...target, head: branch.commit.sha };
