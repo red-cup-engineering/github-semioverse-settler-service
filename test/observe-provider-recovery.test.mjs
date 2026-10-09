@@ -14,7 +14,15 @@ const calls=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):{},attempt=cal
 const out=value=>{process.stdout.write(JSON.stringify(value));process.exit(0)},refuse=status=>{process.stderr.write(status);process.exit(1)};
 const item={id:1,node_id:'PR_example',repository_url:'https://api.github.com/repos/emsenn/example',number:1,html_url:'https://github.com/emsenn/example/pull/1',title:'Example',state:'open',user:{login:'emsenn'},updated_at:'2026-10-07T00:00:00Z',pull_request:{}};
 if(path==='user')out({login:'emsenn'});
-if(path.startsWith('user/repos?'))out([{id:1,owner:{login:'emsenn'},full_name:'emsenn/example'}]);
+if(path.startsWith('user/repos?'))out([{id:1,owner:{login:'emsenn'},full_name:'emsenn/example',default_branch:'main'}]);
+if(path.startsWith('repos/emsenn/example/branches?')){
+ const page=Number(new URL('https://api.github.test/'+path).searchParams.get('page'));
+ if(page===2&&mode==='branch-permission')refuse('gh: Resource not accessible by integration (HTTP 403)');
+ const all=Array.from({length:31},(_,i)=>({name:i===0?'main':i===1?'feature/retained':'branch-'+i,commit:{sha:i===1?'b'.repeat(40):'${head}'},protected:i===0}));
+ if(mode==='branch-duplicate')all[30]=all[0];
+ out(all.slice((page-1)*30,page*30));
+}
+if(path==='repos/emsenn/example/compare/${head}...'+ 'b'.repeat(40)+'?per_page=1')out({base_commit:{sha:mode==='branch-base'?'c'.repeat(40):'${head}'},status:'diverged',ahead_by:2,behind_by:3});
 if(path.startsWith('search/issues?')){
  if(mode==='quota')refuse('gh: API rate limit exceeded (HTTP 403)');
  out({total_count:path.includes('is%3Aclosed')?0:1,incomplete_results:false,items:path.includes('is%3Aclosed')?[]:[item]});
@@ -34,12 +42,12 @@ if(path.includes('/commits/${head}/check-runs?')){
 refuse('unexpected provider path '+path);
 `;
 
-function observe(mode) {
+function observe(mode, branches = false) {
   const folder = mkdtempSync(join(tmpdir(), 'github-provider-recovery-'));
   try {
     writeFileSync(join(folder, 'gh'), provider, { mode: 0o755 });
     const state = join(folder, 'calls.json');
-    const result = spawnSync(process.execPath, [observer, '--owner', 'emsenn', '--pull-checks', '--closed-since', '2026-10-06T00:00:00Z'], {
+    const result = spawnSync(process.execPath, [observer, '--owner', 'emsenn', '--pull-checks', ...(branches ? ['--branches'] : []), '--closed-since', '2026-10-06T00:00:00Z'], {
       encoding: 'utf8', timeout: 15000,
       env: { ...process.env, PATH: `${folder}:${process.env.PATH}`, OBSERVATION_STATE: state, OBSERVATION_MODE: mode },
     });
@@ -80,4 +88,23 @@ for (const mode of ['permission', 'malformed']) test(`${mode} failure is never r
   assert.equal(result.rows.at(-1).kind, 'github.coverage-incomplete');
   assert.equal(result.rows.some(row => row.kind === 'github.coverage-complete'), false);
   assert.equal(Math.max(...Object.values(result.calls)), 1);
+});
+
+test('all branch pages retain exact heads and compare immutable commits rather than moving names', () => {
+  const result = observe('branches', true);
+  assert.equal(result.status, 0, result.stderr);
+  const row = result.rows.find(value => value.kind === 'github.repository-branches');
+  assert.equal(row.branches.length, 31);
+  assert.equal(row.defaultHead, head);
+  assert.deepEqual(row.branches[1], { name: 'feature/retained', head: 'b'.repeat(40), protected: false, status: 'diverged', ahead: 2, behind: 3 });
+  assert.equal(result.calls['repos/emsenn/example/branches?per_page=30&page=2'], 1);
+  assert.equal(result.calls[`repos/emsenn/example/compare/${head}...${'b'.repeat(40)}?per_page=1`], 1);
+  assert.equal(result.rows.at(-1).branchHeads, true);
+  assert.equal(result.rows.at(-1).branches, 31);
+});
+for (const mode of ['branch-permission', 'branch-duplicate', 'branch-base']) test(`${mode} refuses branch coverage without a complete marker`, () => {
+  const result = observe(mode, true);
+  assert.equal(result.status, 1);
+  assert.equal(result.rows.at(-1).kind, 'github.coverage-incomplete');
+  assert.equal(result.rows.some(row => row.kind === 'github.coverage-complete'), false);
 });
