@@ -113,7 +113,18 @@ function observeBranches(repo) {
     if (branch.commit.sha !== base.commit.sha) {
       // Compare immutable commits, never moving branch names. One commit in the
       // response is sufficient for provider counts; no patch/file copy is kept.
-      const value = api(`repos/${repo.full_name}/compare/${base.commit.sha}...${branch.commit.sha}?per_page=1`);
+      let value;
+      try {
+        value = api(`repos/${repo.full_name}/compare/${base.commit.sha}...${branch.commit.sha}?per_page=1`);
+      } catch (error) {
+        // Independent publication/orphan histories are real branches. Only this
+        // exact provider refusal for the two observed heads establishes absence
+        // of ancestry; permission, missing objects and other 404s still fail.
+        const diagnostic = String(error.stderr ?? '');
+        if (!diagnostic.includes(`No common ancestor between ${base.commit.sha} and ${branch.commit.sha}. (HTTP 404)`)) throw error;
+        return { name: branch.name, head: branch.commit.sha, protected: branch.protected === true,
+          status: 'unrelated', ahead: null, behind: null };
+      }
       if (!['ahead', 'behind', 'diverged', 'identical'].includes(value.status) ||
           !Number.isSafeInteger(value.ahead_by) || value.ahead_by < 0 ||
           !Number.isSafeInteger(value.behind_by) || value.behind_by < 0 ||

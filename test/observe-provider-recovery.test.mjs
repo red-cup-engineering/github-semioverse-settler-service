@@ -22,7 +22,11 @@ if(path.startsWith('repos/emsenn/example/branches?')){
  if(mode==='branch-duplicate')all[30]=all[0];
  out(all.slice((page-1)*30,page*30));
 }
-if(path==='repos/emsenn/example/compare/${head}...'+ 'b'.repeat(40)+'?per_page=1')out({base_commit:{sha:mode==='branch-base'?'c'.repeat(40):'${head}'},status:'diverged',ahead_by:2,behind_by:3});
+if(path==='repos/emsenn/example/compare/${head}...'+ 'b'.repeat(40)+'?per_page=1'){
+ if(mode==='branch-unrelated')refuse('gh: No common ancestor between ${head} and '+ 'b'.repeat(40)+'. (HTTP 404)');
+ if(mode==='branch-not-found')refuse('gh: Not Found (HTTP 404)');
+ out({base_commit:{sha:mode==='branch-base'?'c'.repeat(40):'${head}'},status:'diverged',ahead_by:2,behind_by:3});
+}
 if(path.startsWith('search/issues?')){
  if(mode==='quota')refuse('gh: API rate limit exceeded (HTTP 403)');
  out({total_count:path.includes('is%3Aclosed')?0:1,incomplete_results:false,items:path.includes('is%3Aclosed')?[]:[item]});
@@ -102,7 +106,14 @@ test('all branch pages retain exact heads and compare immutable commits rather t
   assert.equal(result.rows.at(-1).branchHeads, true);
   assert.equal(result.rows.at(-1).branches, 31);
 });
-for (const mode of ['branch-permission', 'branch-duplicate', 'branch-base']) test(`${mode} refuses branch coverage without a complete marker`, () => {
+test('observed independent histories remain visible without fabricated ahead/behind counts', () => {
+  const result = observe('branch-unrelated', true);
+  assert.equal(result.status, 0, result.stderr);
+  const row = result.rows.find(value => value.kind === 'github.repository-branches');
+  assert.deepEqual(row.branches[1], { name: 'feature/retained', head: 'b'.repeat(40), protected: false, status: 'unrelated', ahead: null, behind: null });
+  assert.equal(result.rows.at(-1).branchHeads, true);
+});
+for (const mode of ['branch-permission', 'branch-duplicate', 'branch-base', 'branch-not-found']) test(`${mode} refuses branch coverage without a complete marker`, () => {
   const result = observe(mode, true);
   assert.equal(result.status, 1);
   assert.equal(result.rows.at(-1).kind, 'github.coverage-incomplete');
