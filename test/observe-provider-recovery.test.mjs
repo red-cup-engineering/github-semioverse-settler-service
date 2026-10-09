@@ -32,7 +32,8 @@ if(path.startsWith('search/issues?')){
  out({total_count:path.includes('is%3Aclosed')?0:1,incomplete_results:false,items:path.includes('is%3Aclosed')?[]:[item]});
 }
 if(path.startsWith('repos/emsenn/example/issues?'))out(path.includes('state=closed')?[]:[item]);
-if(path==='repos/emsenn/example/pulls/1')out({head:{sha:mode==='head-moved'&&attempt>1?'b'.repeat(40):'${head}'},draft:false,merged:false,mergeable:true});
+if(path==='repos/emsenn/example/pulls/1')out({head:{sha:mode==='head-moved'&&attempt>1?'b'.repeat(40):'${head}'},base:{ref:'main',sha:'${head}',repo:{id:1,full_name:'emsenn/example'}},draft:false,merged:false,mergeable:true,mergeable_state:'clean',auto_merge:null});
+if(path==='repos/emsenn/example/branches/main')out({name:'main',commit:{sha:'${head}'}});
 if(path.startsWith('repos/emsenn/example/pulls/1/reviews?')){
  const page=Number(new URL('https://api.github.test/'+path).searchParams.get('page'));
  if(mode==='review-permission')refuse('gh: Resource not accessible by integration (HTTP 403)');
@@ -181,3 +182,4 @@ for (const mode of ['branch-permission', 'branch-duplicate', 'branch-base', 'bra
   assert.equal(result.rows.at(-1).kind, 'github.coverage-incomplete');
   assert.equal(result.rows.some(row => row.kind === 'github.coverage-complete'), false);
 });
+
