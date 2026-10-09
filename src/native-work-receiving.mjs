@@ -7,10 +7,6 @@ const identityOf = bytes => `ni:///sha-256;${createHash('sha256').update(bytes).
 const canonical = value => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const equal = (left, right) => JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
-// The native arena treats evidence as a set of locators (deduplicated/sorted).
-const evidenceEqual = (left, right) => retainedGitHubEvidence(left ?? [],right ?? []) !== undefined;
-const setFields = new Set(['scope','tags','serves','after','supersedes','relates']);
-const openingFieldEqual = (key,left,right) => key==='evidence' ? evidenceEqual(left,right) : setFields.has(key) ? equal([...new Set(left??[])].sort(),[...new Set(right??[])].sort()) : equal(left,right);
 
 // Delivery identity belongs to transport. Every other observation field,
 // including material, author, observing actor and visibility, still participates.
@@ -25,57 +21,11 @@ function retainedReplayDocument(opening, input, envelope) {
     const recorded = readGitHubSourceDocument(document);
     if (!equal(observationForReplay(recorded), observationForReplay(envelope))) continue;
     const expected = { ...input, sources: input.sources.map(source =>
-      source.kind === 'github-source-document' ? document : source),
-      ...(input.evidence === undefined ? {} : {evidence: input.evidence.map(value => value === input.sources.find(source => source.kind === 'github-source-document')?.locator ? document.locator : value)}) };
+      source.kind === 'github-source-document' ? document : source) };
     // Leave interpretation and scope comparison to the same normalization as
     // exact replay. Reuse the recorded carrier; never rewrite its bytes or NI.
     if (Object.entries(expected).filter(([key]) => key !== 'as')
-      .every(([key, value]) => openingFieldEqual(key,opening[key],value))) return Object.freeze({ ...document });
-  }
-  return undefined;
-}
-
-// The existing arena retains repeated reports as corroborations/restatements.
-// Those moves carry evidence and observation, not new opening sources/context.
-// A complete source document therefore travels as an evidence locator too.
-function evidenceDocument(locator) {
-  if (typeof locator !== 'string' || !locator.startsWith(MEDIA)) return undefined;
-  if (locator.length > MEDIA.length + 4 * Math.ceil(MAX_MATERIAL_BYTES / 3)) throw new RangeError('GitHub source document exceeds 256 KiB');
-  const bytes = Buffer.from(locator.slice(MEDIA.length), 'base64');
-  let parsed;try { parsed = JSON.parse(bytes.toString('utf8')); } catch { return undefined; }
-  if (parsed?.schema !== 'semioverse.github-delta.v1') return undefined;
-  const document = {kind:'github-source-document',locator,commitment:identityOf(bytes)};
-  return {document,envelope:readGitHubSourceDocument(document)};
-}
-/** Compare native evidence sets while preserving the actual recorded carriers.
- * Only GitHub documents receive the same transport-equivalence law as the
- * primary source; unrelated evidence remains an exact locator. */
-export function retainedGitHubEvidence(offered, retained) {
-  const read=values=>{
-    const documents=values.map(evidenceDocument).filter(Boolean);
-    const carriers=new Set(documents.flatMap(({document})=>[document.locator,document.commitment]));
-    const plain=[...new Set(values.filter(value=>!carriers.has(value)))].sort();
-    const keys=[...new Set(documents.map(({envelope})=>JSON.stringify(canonical(observationForReplay(envelope)))))].sort();
-    return {plain,keys,documents};
-  };
-  const left=read(offered),right=read(retained);
-  if(!equal(left.plain,right.plain)||!equal(left.keys,right.keys))return undefined;
-  return left.documents.map(({document,envelope})=>({offered:document,retained:right.documents.find(candidate=>equal(observationForReplay(candidate.envelope),observationForReplay(envelope))).document}));
-}
-function reportEvidenceDocuments(thread) {
-  if (thread?.opening?.move !== 'report') return [];
-  return [...(thread.corroborations ?? []), ...(thread.restatements ?? [])].flatMap(entry =>
-    (entry.evidence ?? []).map(evidenceDocument).filter(Boolean).map(value=>({entry,...value})));
-}
-function retainedReportReplay(thread, input, offered) {
-  if (input.move !== 'report' || thread?.opening?.move !== 'report') return undefined;
-  const fixed = Object.entries(input).filter(([key]) => !['as','sources','evidence','observation'].includes(key));
-  if (!fixed.every(([key,value]) => openingFieldEqual(key,thread.opening[key],value))) return undefined;
-  for (const candidate of reportEvidenceDocuments(thread)) {
-    if (!equal(observationForReplay(candidate.envelope), observationForReplay(offered))) continue;
-    const offeredLocator = input.sources.find(source => source.kind === 'github-source-document')?.locator;
-    const evidence = input.evidence.map(value => value === offeredLocator ? candidate.document.locator : value);
-    if (candidate.entry.observation === input.observation && evidenceEqual(candidate.entry.evidence,evidence)) return candidate.document;
+      .every(([key, value]) => equal(opening[key], value))) return Object.freeze({ ...document });
   }
   return undefined;
 }
@@ -125,30 +75,7 @@ export function prepareGitHubWork({ event, opening, binding }) {
       document,
     ],
   };
-  if (input.move === 'report') input.evidence = [...(input.evidence ?? []), document.locator];
   return Object.freeze({ envelope, document, input, receiver: binding.receiver });
-}
-
-/** Complete canonical source selection, reused by arrival and closure receiving. */
-export async function readGitHubSourceThreads(call, source) {
-  let after, position, expected; const seen = new Set(), threads = [];
-  for (let page = 0; page < 50; page++) {
-    const selected = await call('work-board', { source, full: true, limit: 20, ...(after === undefined ? {} : { after }) });
-    if (!Array.isArray(selected?.threads) || selected.threads.length > 20 || typeof selected.position !== 'string' || !Number.isSafeInteger(selected.matched) || selected.matched < 0) throw new Error('native source selection is incomplete');
-    if (position !== undefined && (selected.position !== position || selected.matched !== expected)) throw new Error('native source selection changed while paging');
-    position = selected.position; expected = selected.matched;
-    for (const item of selected.threads) {
-      if (typeof item.id !== 'string' || !item.id || seen.has(item.id)) throw new Error('native source selection repeated or omitted a thread identity');
-      if (!Array.isArray(item.opening?.sources) || !item.opening.sources.some(value => value.locator === source)) throw new Error('native source selection returned unrelated or incomplete thread evidence');
-      seen.add(item.id); threads.push(item);
-    }
-    if (selected.next === undefined) {
-      if (threads.length !== expected) throw new Error('native source selection ended before complete receiving readback');
-      return threads;
-    }
-    if (page === 49 || !selected.threads.length || selected.next !== selected.threads.at(-1).id || selected.next === after || threads.length >= expected) throw new Error('native source selection exceeded its complete paging bound');
-    after = selected.next;
-  }
 }
 
 /** The effectful part has no filesystem, credentials, receipt map or provider SDK.
@@ -161,24 +88,30 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
   const offeredObservation = readGitHubSourceDocument(document);
   let known;
   let retainedDocument = document;
-  let evidenceCarriers = retainedGitHubEvidence(input.evidence ?? [], input.evidence ?? []) ?? [];
-  for (const item of await readGitHubSourceThreads(call, envelope.source.url)) {
-    if (input.move === 'report' && item.opening?.move === 'report' &&
-        typeof input.law === 'string' && typeof input.subject === 'string' &&
-        item.opening.law === input.law && item.opening.subject === input.subject) {
-      const fixed = [...new Set([...Object.keys(input),...Object.keys(item.opening)])].filter(key=>!['as','sources','evidence','observation','by','at','id','hand','edition','decidedBy'].includes(key));
-      if (!fixed.every(key => openingFieldEqual(key,item.opening[key],input[key])))
-        throw new Error('existing report cannot retain changed interpretation fields; no corroboration attempted');
+  let after;
+  let position;
+  const seen = new Set();
+  // The board's own source index is the receiving map. No independent cursor,
+  // mutable work-state mirror, or duplicate receipt database is maintained.
+  for (let page = 0; page < 50; page++) {
+    const selected = await call('work-board', { source: envelope.source.url, full: true, limit: 20, ...(after === undefined ? {} : { after }) });
+    if (!Array.isArray(selected?.threads) || typeof selected.position !== 'string') throw new Error('native source selection is incomplete');
+    if (position !== undefined && selected.position !== position) throw new Error('native source selection changed while paging');
+    position = selected.position;
+    for (const item of selected.threads) {
+      if (typeof item.id !== 'string' || seen.has(item.id)) throw new Error('native source selection repeated or omitted a thread identity');
+      seen.add(item.id);
+      // If native normalization changes a field, let its own opening law judge
+      // replay instead of maintaining a second normalization/schema here.
+      const replayDocument = retainedReplayDocument(item.opening, input, offeredObservation);
+      if (replayDocument) {
+        known = item;
+        retainedDocument = replayDocument;
+      }
     }
-
-    const replayDocument = retainedReplayDocument(item.opening, input, offeredObservation) ?? retainedReportReplay(item, input, offeredObservation);
-    if (replayDocument) {
-      known = item; retainedDocument = replayDocument;
-      const sayings=[item.opening,...(item.corroborations??[]),...(item.restatements??[])];
-      const selected=sayings.map(saying=>retainedGitHubEvidence(input.evidence??[],saying.evidence??[])).find(value=>value!==undefined);
-      if(selected===undefined)throw new Error('native source selection omitted exact evidence carriers');
-      evidenceCarriers=structuredClone(selected);
-    }
+    if (known || !selected.next) break;
+    if (page === 49 || selected.next === after || !seen.has(selected.next)) throw new Error('native source selection exceeded its complete paging bound');
+    after = selected.next;
   }
   const admitted = known ? { id: known.id } : await call('work-open', input);
   const thread = admitted?.thread ?? admitted?.id;
@@ -186,14 +119,8 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
   const readback = await call('work-board', { thread, full: true, limit: 1 });
   const actual = readback?.threads?.find(item => item.id === thread);
   if (!actual?.opening) throw new Error('native admission has no complete receiving readback');
-  const receivedEvidence = reportEvidenceDocuments(actual).find(({document: source,entry}) => source.commitment === retainedDocument.commitment && source.locator === retainedDocument.locator && evidenceEqual(input.evidence, entry.evidence));
-  const receivedDocument = actual.opening.sources?.find(source => source.kind === retainedDocument.kind && source.commitment === retainedDocument.commitment) ?? receivedEvidence?.document;
+  const receivedDocument = actual.opening.sources?.find(source => source.kind === retainedDocument.kind && source.commitment === retainedDocument.commitment);
   if (!receivedDocument || receivedDocument.locator !== retainedDocument.locator) throw new Error('native readback did not retain the exact source document');
-  if (evidenceCarriers.length) {
-    const sayings=[actual.opening,...(actual.corroborations??[]),...(actual.restatements??[])];
-    if(!sayings.some(saying=>evidenceCarriers.every(({retained})=>(saying.evidence??[]).includes(retained.locator))))
-      throw new Error('native readback did not retain the exact selected evidence carriers');
-  }
   const offeredSourceRetained = receivedDocument.locator === document.locator;
   const routed = actual.home === receiver;
   return Object.freeze({
@@ -202,11 +129,10 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
     providerObjectKey: envelope.providerObjectKey,
     eventKey: envelope.eventKey,
     sourceDocument: receivedDocument.commitment,
-    sourceEvidence: evidenceCarriers.map(({offered,retained})=>({offered:offered.commitment,retained:retained.commitment,offeredSourceRetained:offered.locator===retained.locator})),
     offeredSourceDocument: document.commitment,
     receiver: actual.home ?? null,
     expectedReceiver: receiver,
-    postedBy: receivedEvidence?.entry.player ?? actual.opening.by,
+    postedBy: actual.opening.by,
     replay: known !== undefined,
     standing: actual.standing,
     // Receipt stages stay distinct: no promise, allocation, implementation or
