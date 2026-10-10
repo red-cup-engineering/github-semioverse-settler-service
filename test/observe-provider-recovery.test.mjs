@@ -29,6 +29,13 @@ if(path==='repos/emsenn/example/compare/${head}...'+ 'b'.repeat(40)+'?per_page=1
 }
 if(path.startsWith('search/issues?')){
  if(mode==='quota')refuse('gh: API rate limit exceeded (HTTP 403)');
+ const closed=path.includes('is%3Aclosed'),page=Number(new URL('https://api.github.test/'+path).searchParams.get('page'));
+ if(mode==='moving-search'&&!closed||mode==='moving-closed-search'&&closed||mode==='continuous-search'&&!closed){
+  const all=Array.from({length:32},(_,i)=>{const row={...item,id:(closed?100:0)+i+1,number:i+1,state:closed?'closed':'open'};delete row.pull_request;return row;});
+  if(page===1&&attempt===1){all[0].id=9001;all[0].number=9001;} // belongs only to the discarded population
+  const total=mode==='continuous-search'?30+attempt*2+(page===2?1:0):page===1&&attempt===1?31:32;
+  out({total_count:total,incomplete_results:false,items:all.slice((page-1)*30,page*30)});
+ }
  out({total_count:path.includes('is%3Aclosed')?0:1,incomplete_results:false,items:path.includes('is%3Aclosed')?[]:[item]});
 }
 if(path.startsWith('repos/emsenn/example/issues?'))out(path.includes('state=closed')?[]:[item]);
@@ -148,6 +155,28 @@ test('search quota switches to discovered repositories without retrying search',
   assert.equal(searches.length, 1);
   assert.equal(searches[0][1], 1);
   assert.equal(result.rows.at(-1).kind, 'github.coverage-complete');
+});
+for(const mode of ['moving-search','moving-closed-search']) test(`${mode} discards every unstable page and restarts only that owner query`,()=>{
+  const result=observe(mode,true);
+  assert.equal(result.status,0,result.stderr);
+  const queries=Object.entries(result.calls).filter(([path])=>path.startsWith('search/issues?')&&path.includes(mode==='moving-search'?'is%3Aopen':'is%3Aclosed'));
+  assert.equal(queries.length,2);
+  assert.ok(queries.every(([,count])=>count===2));
+  const issues=result.rows.filter(row=>row.kind==='github.issue');
+  assert.equal(issues.length,32);
+  assert.equal(issues.some(row=>row.number===9001),false);
+  assert.equal(result.calls['repos/emsenn/example/branches?per_page=30&page=1'],1);
+  assert.equal(Object.keys(result.calls).some(path=>path.includes('/issues?state=')),false);
+  assert.equal(result.rows.at(-1).kind,'github.coverage-complete');
+});
+test('continuous search movement stops after three whole-query attempts and never establishes coverage',()=>{
+  const result=observe('continuous-search');
+  assert.equal(result.status,1);
+  const queries=Object.entries(result.calls).filter(([path])=>path.startsWith('search/issues?'));
+  assert.equal(queries.length,2);
+  assert.ok(queries.every(([,count])=>count===3));
+  assert.equal(result.rows.some(row=>row.kind==='github.issue'||row.kind==='github.coverage-complete'),false);
+  assert.equal(result.rows.at(-1).kind,'github.coverage-incomplete');
 });
 for (const mode of ['permission', 'malformed']) test(`${mode} failure is never retried or called complete`, () => {
   const result = observe(mode);

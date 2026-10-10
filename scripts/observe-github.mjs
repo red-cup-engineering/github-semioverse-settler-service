@@ -47,7 +47,7 @@ function pages(path, field) {
   throw new Error(`Pagination bound reached; coverage is incomplete: ${path}`);
 }
 let searchQuotaUnavailable = false;
-function search(query) {
+function search(query, observationAttempt = 1) {
   if (searchQuotaUnavailable) return null;
   const result = [];
   const seen = new Set();
@@ -67,7 +67,14 @@ function search(query) {
     if (batch.incomplete_results || !Array.isArray(batch.items)) throw new Error(`Incomplete GitHub search: ${query}`);
     if (batch.total_count > 1000) return null; // Partition by actual repositories below.
     if (expected === undefined) expected = batch.total_count;
-    else if (expected !== batch.total_count) throw new Error(`GitHub work changed during pagination; rerun: ${query}`);
+    else if (expected !== batch.total_count) {
+      // Discard this query's entire partial population. Retain owner-search
+      // scope, including public repositories outside the membership inventory;
+      // never join pages from different populations or redo branch observation.
+      if (observationAttempt >= 3) throw new Error(`GitHub work changed during pagination; rerun: ${query}`);
+      process.stderr.write(`GitHub work changed during pagination; restart ${observationAttempt + 1}/3: ${query}\n`);
+      return search(query, observationAttempt + 1);
+    }
     for (const item of batch.items) {
       if (seen.has(item.id)) throw new Error(`Repeated GitHub identity during pagination; rerun: ${item.html_url}`);
       seen.add(item.id); result.push(item);
