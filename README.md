@@ -17,6 +17,37 @@ the parent/head. Its receipts cannot prove reception of the content it dropped.
 The material-bearing event keys deliberately require a new receiving receipt;
 do not migrate old metadata-only receipts as evidence of complete admission.
 
+## Work coordinate reading is not work admission
+
+`normalizeGitHubEvent` preserves the complete source material, author,
+observer, action, revision and NI commitment regardless of whether a work
+coordinate can be interpreted. Its existing `work` projection accepts
+scalar declarations only in a complete leading YAML frontmatter envelope or
+an initial sequence of unindented `key: value` lines. It reads the retained
+WorkUnit vocabulary (`work_ref`, `owning_office`, `owner`, `receiver`,
+`acceptance_test`, causal links and coordination fields). The projection
+does **not** parse nested YAML as operative office law.
+
+A quoted statement, example fence, indented code, prose paragraph, Markdown
+heading, incomplete frontmatter, or later body occurrence of `owner:`
+is a **locution in source evidence**, not an instruction naming an office.
+Repeated equivalent keys may corroborate a value; conflicting declarations
+of one normalized key, or incompatible `owner`/`owning_office`, refuse
+that selected coordinate. Both readings remain in `material.body` and
+in the content-addressed provider observation; no part is deleted or
+silently settled by string order.
+
+This protects GitHub-to-Work intake, not institutional semantics. The
+source's `work.owner` is untrusted testimony until an authenticated
+Work Arena/Coesite/Group receiver independently qualifies the principal,
+jurisdiction, office duty, authority, original obligation and receiving
+condition. It cannot appoint an agent or admit a contract. This reflects
+[L-Space's current SAS](https://github.com/lenticule-science/linguistics-services-section/blob/main/specifications/l-space-semantic-architecture.md)
+and [Red Cup's existing HLD/LLD](https://github.com/red-cup-engineering/capability-cell-fabrication-services-section/blob/main/specifications/l-space-lld.md),
+which distinguish attributed words, illocutionary force, formal evidence and
+received institutional effects. `test/settler.test.mjs` now includes the
+corresponding positive, contradiction and quotation/refusal cases.
+
 ## Observe the actual GitHub estate
 
 Run `node scripts/observe-github.mjs` with authenticated `gh`. It discovers the

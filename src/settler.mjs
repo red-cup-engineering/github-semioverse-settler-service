@@ -46,18 +46,49 @@ function submissionOf(body) {
   });
 }
 
+// Source text declares proposed work coordinates, not institutional authority.
+// Only an initial scalar-key preamble or complete YAML frontmatter can carry them.
+// Code samples, quoted speech and paragraphs remain locutions, never routing data.
 function machineFields(body = '') {
   if (typeof body !== 'string') return {};
   const wanted = new Set([
     'work_ref','correlation','causal_parents','canonical_receiver','owner','owning_office',
     'effect_class','receiver','acceptance_test','handoff_epoch','lease','visibility_class','sync_back'
   ]);
-  const out = {};
-  for (const line of body.split(/\r?\n/)) {
-    const match = /^([A-Za-z0-9_-]+):\s*(.*?)\s*$/.exec(line);
-    if (!match) continue;
+  const lines = body.replace(/^\uFEFF/u, '').split(/\r?\n/u);
+  const frontmatter = lines[0]?.trim() === '---';
+  let candidates;
+  if (frontmatter) {
+    const closing = lines.findIndex((line, index) => index > 0 && /^(?:---|\.\.\.)$/u.test(line.trim()));
+    if (closing === -1) return {}; // incomplete YAML cannot certify a declaration
+    candidates = lines.slice(1, closing);
+  } else {
+    candidates = [];
+    for (const line of lines) {
+      if (!line.trim()) { candidates.push(line); continue; }
+      if (!/^[A-Za-z0-9_-]+:[ \t]*.*$/u.test(line)) break;
+      candidates.push(line);
+    }
+  }
+  const observed = new Map();
+  for (const line of candidates) {
+    const match = /^([A-Za-z0-9_-]+):[ \t]*(.*?)[ \t]*$/u.exec(line);
+    if (!match) continue; // nested YAML and multiline values are not root-level scalars
     const key = match[1].toLowerCase().replaceAll('-', '_');
-    if (wanted.has(key) && match[2] !== '') out[key] = match[2];
+    const value = match[2].trim();
+    // This is an intentionally narrow scalar reader, not a YAML parser.
+    // Quoted, composite, folded or commented syntax needs a qualified codec.
+    if (!wanted.has(key) || !value || value === '|' || value === '>' ||
+        ['"', "'", '[', '{'].some(marker => value.startsWith(marker)) || /[ \t]#/u.test(value)) continue;
+    if (!observed.has(key)) observed.set(key, value);
+    else if (observed.get(key) !== value) observed.set(key, null);
+  }
+  const out = Object.fromEntries([...observed].filter(([, value]) => value !== null));
+  // Distinct declarations of an owner and owning office are competing testimony,
+  // not grounds for selecting whichever spelling happens to take precedence.
+  if (out.owner && out.owning_office && out.owner !== out.owning_office) {
+    delete out.owner;
+    delete out.owning_office;
   }
   return out;
 }

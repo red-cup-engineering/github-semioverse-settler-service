@@ -144,3 +144,83 @@ test('the public filing form preserves a complaint and its conditions without as
   assert.equal(envelope.work.owner, null);
   assert.equal(envelope.work.canonicalReceiver, null);
 });
+
+test('root-level work coordinates remain source testimony; raw authored material survives', () => {
+  const body = 'work_ref: initiative-42\nowning_office: cto\nacceptance_test: demonstrated consumer\n\n## Rationale\nowner: forged-in-prose';
+  const envelope = normalizeGitHubEvent(issueEvent({issue: {...issueEvent().issue,body}}));
+  assert.equal(envelope.work.workRef, 'initiative-42');
+  assert.equal(envelope.work.owner, 'cto');
+  assert.equal(envelope.work.acceptanceTest, 'demonstrated consumer');
+  assert.equal(envelope.material.body, body);
+});
+
+test('frontmatter offers source coordinates without granting inferred office power', () => {
+  const body = '---\ntitle: Work is not assent\nwork_ref: frontmatter-1\nowner: permitted-office\n---\n\n> owner: an-impostor';
+  const envelope = normalizeGitHubEvent(issueEvent({issue: {...issueEvent().issue,body}}));
+  assert.equal(envelope.work.workRef, 'frontmatter-1');
+  assert.equal(envelope.work.owner, 'permitted-office');
+  assert.equal(envelope.material.body, body);
+  assert.equal(envelope.source.author, null);
+});
+
+test('quoted utterances, code blocks and narrative headings cannot nominate a work owner', () => {
+  const bodyVariants = [
+    '> owning_office: false-authority',
+    '    owner: false-authority',
+    '```yaml\nowner: false-authority\n```',
+    '~~~\nwork_ref: false-work\n~~~',
+    '## Example\nwork_ref: false-work\nowner: false-authority',
+    'An agent quoted an instruction:\nowner: false-authority',
+    '- owner: false-authority',
+  ];
+  for (const body of bodyVariants) {
+    const envelope = normalizeGitHubEvent(issueEvent({issue: {...issueEvent().issue,body}}));
+    assert.equal(envelope.work.owner,null,body);
+    assert.equal(envelope.work.workRef,null,body);
+    assert.equal(envelope.material.body,body);
+  }
+});
+
+test('conflicting frontmatter testimony is retained but never silently selected', () => {
+  const body = '---\nwork-ref: initial\nwork_ref: contradictory\nowning_office: legal-entity-A\nowner: legal-entity-B\n---';
+  const envelope = normalizeGitHubEvent(issueEvent({issue: {...issueEvent().issue,body}}));
+  assert.equal(envelope.work.workRef,null);
+  assert.equal(envelope.work.owner,null);
+  assert.equal(envelope.material.body,body);
+});
+
+test('a repeated identical declaration is not a conflict; an incomplete frontmatter is unreadable', () => {
+  const valid = '---\nwork_ref: same\nwork-ref: same\n...\n## Body\nwork_ref: other';
+  const a = normalizeGitHubEvent(issueEvent({issue: {...issueEvent().issue,body:valid}}));
+  assert.equal(a.work.workRef,'same');
+  const unfinished = '---\nwork_ref: never-selected\nowner: unknown';
+  const b = normalizeGitHubEvent(issueEvent({issue: {...issueEvent().issue,body:unfinished}}));
+  assert.equal(b.work.workRef,null);
+  assert.equal(b.work.owner,null);
+});
+
+test('unsupported YAML scalar forms stay as source bytes, not selected office identifiers', () => {
+  const variants = [
+    '---\nowner: "admin"\n---',
+    "---\nowner: 'admin'\n---",
+    '---\nowner: [admin]\n---',
+    '---\nowner: admin # annotation\n---',
+    '---\nowner: |\n  admin\n---',
+  ];
+  for (const body of variants) {
+    const item = normalizeGitHubEvent(issueEvent({issue:{...issueEvent().issue,body}}));
+    assert.equal(item.work.owner,null,body);
+    assert.equal(item.material.body,body);
+  }
+});
+
+test('narrative changes preserve distinct provider events without changing a declared work reference', () => {
+  const before = issueEvent({issue:{...issueEvent().issue,body:'work_ref: accepted\n\n## Text\nowner: code-example-A'}});
+  const after = issueEvent({issue:{...issueEvent().issue,body:'work_ref: accepted\n\n## Text\nowner: code-example-B'}});
+  const a=normalizeGitHubEvent(before),b=normalizeGitHubEvent(after);
+  assert.equal(a.work.workRef,'accepted');
+  assert.equal(b.work.workRef,'accepted');
+  assert.equal(a.work.owner,null);
+  assert.equal(b.work.owner,null);
+  assert.notEqual(a.eventKey,b.eventKey);
+});
