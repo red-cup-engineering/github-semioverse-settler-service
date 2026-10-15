@@ -4,6 +4,7 @@ import { FileReceiptStore } from "../src/file-receipt-store.mjs";
 import { createMetroplatArrivalAdmit } from "../src/metroplat-http-admit.mjs";
 import { collectGitHubRepositories } from "../src/github-poll.mjs";
 import { reconcileGitHubDeltas } from "../src/reconcile.mjs";
+import { settleGitHubEnvelope } from "../src/settler.mjs";
 
 const required = name => {
   const value = process.env[name];
@@ -56,8 +57,7 @@ const result = await reconcileGitHubDeltas({
     revision: envelope.source.revision,
     eventKey: envelope.eventKey,
   })),
-  highWaterStore: store,
-  settle: async envelope => ({ state: "RECEIVED", receipt: await admit(envelope) }),
+  settle: envelope => settleGitHubEnvelope({ envelope, receiptStore: store, admit }),
   scope: owners.join(","),
 });
 process.stdout.write(JSON.stringify(result, null, 2) + "\n");

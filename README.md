@@ -17,6 +17,50 @@ the parent/head. Its receipts cannot prove reception of the content it dropped.
 The material-bearing event keys deliberately require a new receiving receipt;
 do not migrate old metadata-only receipts as evidence of complete admission.
 
+## Reconciliation preserves each observed source revision
+
+The reconciler now passes every material-bound provider event to the existing
+durable event-key settler. Git SHAs are opaque identifiers, not ordered clocks;
+two edits can also have the same timestamp. No lexicographic/numeric/timestamp
+high-water can prove an earlier event was already received. The misleading
+high-water store and its skip rule have been retired.
+
+The poller passes normalized GitHub snapshots to `settleGitHubEnvelope`, the
+same durable receipt and replay mechanism used for webhook intake. Exact replay
+reuses the retained receipt. Different material receives a distinct event
+identity even when a head SHA or timestamp is unchanged. Pending source
+admission is never called settled. Reconciliation exposes `newlyReceived`,
+`replayed` and `pending` separately.
+
+This change cannot reconstruct past edits that GitHub no longer serves;
+webhook retention, runtime installation and the Semioverse receiver's own
+readback remain separate work. Cold Red Gate's outage is not resolved by this
+source correction.
+
+## Use MetroPlat's supplied-CloudEvent arrival boundary
+
+The GitHub delta's eventKey already binds observed material, provider object
+identity, revision and action. The ingress adapter projects that existing
+event into standard CloudEvents 1.0 with a canonical SHA-256 NI event ID,
+stable numeric GitHub repository source, GitHub delta type and the original
+provenance-bearing observation as data. Only the transport delivery ID is
+excluded from source identity, so two retries are byte-identical while
+distinct repository aliases or actors cannot collide under one CloudEvent ID.
+The original eventKey remains inside the typed observation. This is source custody, **not** a new Semiotic Lineage Control
+format or an institutional authority claim.
+
+Configure METROPLAT_ARRIVAL_URL to the genuine /arrivals path on the receiving
+MetroPlat service. **Do not configure /**: root POST records an HTTP transport
+observation of the request; it does not admit the enclosed GitHub event as a
+supplied CloudEvent. The adapter rejects root and unrelated paths outright.
+The receiver's native /arrivals route validates the supplied CloudEvent.
+
+The returned MetroPlat receipt proves arrival custody only. Work Arena
+admission, owner and office selection, interpretation of typed locutions,
+semantics, production installation and downstream customer receiving remain
+separate. The receipt does not discharge a duty. This alpha migration requires
+correction of prior root-URL configuration, with no silent compatibility shim.
+
 ## Work coordinate reading is not work admission
 
 `normalizeGitHubEvent` preserves the complete source material, author,

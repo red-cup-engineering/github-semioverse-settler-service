@@ -1,70 +1,62 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
-import { FileHighWaterStore, reconcileGitHubDeltas } from "../src/reconcile.mjs";
+import { reconcileGitHubDeltas } from "../src/reconcile.mjs";
 
 const delta = (revision, eventKey = "event:" + revision) => ({
-  providerObjectKey: "github:repo:561:issue:I_99", revision, eventKey
+  providerObjectKey: "github:repo:561:issue:I_99", revision, eventKey,
 });
 
-test("high-water store survives reopen and advances atomically", () => {
-  const dir = mkdtempSync(join(tmpdir(), "github-high-water-"));
-  try {
-    const path = join(dir, "high-water.json");
-    const first = new FileHighWaterStore(path);
-    first.put("github:repo:561:issue:I_99", { revision: "10", eventKey: "event:10" });
-    const second = new FileHighWaterStore(path);
-    assert.equal(second.get("github:repo:561:issue:I_99").revision, "10");
-    second.put("github:repo:561:issue:I_99", { revision: "11", eventKey: "event:11" });
-    assert.equal(new FileHighWaterStore(path).get("github:repo:561:issue:I_99").eventKey, "event:11");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+function receiptSettler() {
+  const receipts = new Map(), admitted = [];
+  return {admitted,settle: async object => {
+    if (receipts.has(object.eventKey)) return {state:"DUPLICATE_RECEIVED",receipt:receipts.get(object.eventKey)};
+    const receipt = {receiptId:"receipt:" + object.eventKey};
+    admitted.push(object.eventKey); receipts.set(object.eventKey,receipt);
+    return {state:"RECEIVED",receipt};
+  }};
+}
+
+test("nonchronological Git SHAs are all received, including a lexically earlier new head",async()=>{
+  const sink=receiptSettler();
+  const first=await reconcileGitHubDeltas({list:async()=>[delta("f".repeat(40))],settle:sink.settle});
+  const next=await reconcileGitHubDeltas({list:async()=>[delta("0".repeat(40))],settle:sink.settle});
+  assert.equal(first.newlyReceived,1);assert.equal(next.newlyReceived,1);
+  assert.deepEqual(sink.admitted,["event:"+"f".repeat(40),"event:"+"0".repeat(40)]);
 });
 
-test("reconcile settles only above the stored high-water and advances it from the receipt", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "github-reconcile-"));
-  try {
-    const store = new FileHighWaterStore(join(dir, "high-water.json"));
-    store.put("github:repo:561:issue:I_99", { revision: "10", eventKey: "event:10" });
-    const seen = [];
-    const result = await reconcileGitHubDeltas({
-      list: async () => [delta("9"), delta("11")],
-      highWaterStore: store,
-      settle: async object => { seen.push(object.eventKey); return { state: "RECEIVED", receipt: { receiptId: "receipt:" + object.eventKey } }; },
-      now: () => "2026-10-07T15:00:00Z",
-    });
-    assert.deepEqual(seen, ["event:11"]);
-    assert.equal(result.observed, 2);
-    assert.equal(result.settled, 1);
-    assert.equal(result.belowHighWater, 1);
-    assert.equal(store.get("github:repo:561:issue:I_99").eventKey, "event:11");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+test("late older update and different material at the same revision are retained",async()=>{
+  const sink=receiptSettler();
+  await reconcileGitHubDeltas({list:async()=>[delta("2026-10-14T23:20:00Z","newer")],settle:sink.settle});
+  const r=await reconcileGitHubDeltas({list:async()=>[
+    delta("2026-10-14T23:10:00Z","older"),delta("2026-10-14T23:20:00Z","material-a"),delta("2026-10-14T23:20:00Z","material-b")
+  ],settle:sink.settle});
+  assert.deepEqual(sink.admitted.sort(),["newer","older","material-a","material-b"].sort());
+  assert.equal(r.newlyReceived,3);assert.equal(r.pending,0);
 });
 
-test("duplicate settlement still advances the high-water without a second native admission", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "github-reconcile-"));
-  try {
-    const store = new FileHighWaterStore(join(dir, "high-water.json"));
-    let calls = 0;
-    const settle = async () => { calls += 1; return { state: "DUPLICATE_RECEIVED", receipt: { receiptId: "existing" } }; };
-    const result = await reconcileGitHubDeltas({ list: async () => [delta("12")], highWaterStore: store, settle });
-    assert.equal(calls, 1);
-    assert.equal(result.settled, 1);
-    assert.equal(store.get("github:repo:561:issue:I_99").revision, "12");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+test("exact event replay yields no second admission, including duplicate observations within a batch",async()=>{
+  const sink=receiptSettler(),list=async()=>[delta("same"),delta("same")];
+  const first=await reconcileGitHubDeltas({list,settle:sink.settle});
+  const again=await reconcileGitHubDeltas({list,settle:sink.settle});
+  assert.equal(first.newlyReceived,1);assert.equal(first.replayed,1);
+  assert.equal(again.newlyReceived,0);assert.equal(again.replayed,2);
+  assert.deepEqual(sink.admitted,["event:same"]);
 });
 
-test("failed settlement does not move the high-water", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "github-reconcile-"));
-  try {
-    const store = new FileHighWaterStore(join(dir, "high-water.json"));
-    const result = await reconcileGitHubDeltas({
-      list: async () => [delta("13")],
-      highWaterStore: store,
-      settle: async () => ({ state: "PENDING_RECEIVER_READBACK" }),
-    });
-    assert.equal(result.pending, 1);
-    assert.equal(store.get("github:repo:561:issue:I_99"), null);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+test("unreceived events remain eligible for later independent receipt",async()=>{
+  const sink=receiptSettler();let pending=true;
+  const settle=async row=>pending?{state:"PENDING_RECEIVER_READBACK"}:sink.settle(row);
+  const first=await reconcileGitHubDeltas({list:async()=>[delta("pending")],settle});
+  assert.equal(first.pending,1);pending=false;
+  const next=await reconcileGitHubDeltas({list:async()=>[delta("pending")],settle});
+  assert.equal(next.newlyReceived,1);
+});
+
+test("one event key cannot be bound to contradictory provider coordinates",async()=>{
+  let calls=0;
+  await assert.rejects(reconcileGitHubDeltas({
+    list:async()=>[delta("head-a","same-key"),delta("head-b","same-key")],
+    settle:async()=>{calls++;return {state:"RECEIVED"}},
+  }),/conflicting source/);
+  assert.equal(calls,0);
 });

@@ -26,6 +26,9 @@ function canonical(value) {
   return value;
 }
 
+// Reuse the normalizer's canonical byte ordering for CloudEvent source identity.
+export { canonical as canonicalGitHubValue };
+
 /** Provider bytes are evidence, never an office appointment or an execution grant. */
 function submissionOf(body) {
   if (typeof body !== 'string') return null;
@@ -228,11 +231,33 @@ function exposedResult(state, envelope, outcome) {
 }
 
 export async function settleGitHubEvent({ event, receiptStore, admit }) {
+  return settleGitHubEnvelope({ envelope: normalizeGitHubEvent(event), receiptStore, admit });
+}
+
+/** Provider snapshot already normalized by the GitHub poller.
+ * Reuse the webhook intake's durable event-key receipts and claim handling. */
+export async function settleGitHubEnvelope({ envelope, receiptStore, admit }) {
+  if (envelope?.schema !== 'semioverse.github-delta.v1' ||
+      typeof envelope.providerObjectKey !== 'string' || typeof envelope.eventKey !== 'string' ||
+      !Number.isSafeInteger(envelope.source?.repositoryId) || envelope.source.repositoryId <= 0 ||
+      typeof envelope.source?.objectType !== 'string' || typeof envelope.source?.objectId !== 'string' ||
+      typeof envelope.source?.revision !== 'string' || typeof envelope.action !== 'string' ||
+      !envelope.material || typeof envelope.material !== 'object')
+    throw new TypeError('complete normalized GitHub observation required');
+  const materialIdentity = 'ni:///sha-256;' +
+    createHash('sha256').update(JSON.stringify(canonical(envelope.material))).digest('base64url');
+  const providerKey = 'github:repo:' + envelope.source.repositoryId + ':' +
+    envelope.source.objectType + ':' + envelope.source.objectId;
+  const eventKey = providerKey + ':revision:' + envelope.source.revision +
+    ':action:' + envelope.action + ':material:' + materialIdentity;
+  if (materialIdentity !== envelope.materialIdentity || providerKey !== envelope.providerObjectKey ||
+      eventKey !== envelope.eventKey || String(revisionFor(envelope.source.objectType,
+        envelope.material, {delivery_id: envelope.source.deliveryId})) !== envelope.source.revision)
+    throw new Error('normalized GitHub event identity does not bind its provider material');
   if (!receiptStore || typeof receiptStore.get !== 'function' || typeof receiptStore.put !== 'function') {
     throw new TypeError('receiptStore get/put interface is required');
   }
   if (typeof admit !== 'function') throw new TypeError('admit function is required');
-  const envelope = normalizeGitHubEvent(event);
   const existing = receiptStore.get(envelope.eventKey);
   if (existing) {
     clearSettledClaim(receiptStore, envelope.eventKey);

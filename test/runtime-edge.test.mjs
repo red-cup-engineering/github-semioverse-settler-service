@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { FileReceiptStore } from "../src/file-receipt-store.mjs";
-import { createMetroplatArrivalAdmit } from "../src/metroplat-http-admit.mjs";
+import { createMetroplatArrivalAdmit, githubDeltaCloudEvent } from "../src/metroplat-http-admit.mjs";
 import { settleGitHubEvent } from "../src/settler.mjs";
 
 function issueEvent() {
@@ -56,10 +56,10 @@ test("file receipt store survives process-style reopen and refuses overwrite", (
   }
 });
 
-test("MetroPlat adapter posts typed GitHub delta to the mounted root and binds its arrival receipt", async () => {
+test("MetroPlat adapter admits a structured CloudEvent at /arrivals with stable source identity", async () => {
   let observed;
   const admit = createMetroplatArrivalAdmit({
-    url: "http://metroplat.test/",
+    url: "http://metroplat.test/arrivals",
     authorization: "Bearer example",
     fetchImpl: async (url, options) => {
       observed = { url: String(url), options };
@@ -70,11 +70,19 @@ test("MetroPlat adapter posts typed GitHub delta to the mounted root and binds i
     },
   });
 
-  const receipt = await admit({ schema: "semioverse.github-delta.v1", eventKey: "event:1" });
-  assert.equal(observed.url, "http://metroplat.test/");
+  const envelope = normalizeGitHubEvent(issueEvent());
+  const receipt = await admit(envelope);
+  assert.equal(observed.url, "http://metroplat.test/arrivals");
   assert.equal(observed.options.method, "POST");
   assert.equal(observed.options.headers.authorization, "Bearer example");
-  assert.equal(JSON.parse(observed.options.body).schema, "semioverse.github-delta.v1");
+  const event = JSON.parse(observed.options.body);
+  assert.equal(observed.options.headers["content-type"], "application/cloudevents+json");
+  assert.equal(event.specversion, "1.0");
+  assert.match(event.id, /^ni:\/\/\/sha-256;[A-Za-z0-9_-]{43}$/u);
+  assert.equal(event.source, "urn:github:repository:561");
+  assert.equal(event.type, "org.561group.semioverse.github-delta.v1");
+  const { deliveryId, ...qualifiedSource } = envelope.source;
+  assert.deepEqual(event.data, { ...envelope, source: qualifiedSource });
   assert.equal(
     receipt.receiptId,
     "metroplat-arrival:ni:///sha-256;example:abc123",
@@ -88,7 +96,7 @@ test("persistent receipt store suppresses a second network admission of the same
   try {
     const store = new FileReceiptStore(join(dir, "receipts.json"));
     const admit = createMetroplatArrivalAdmit({
-      url: "http://metroplat.test/",
+      url: "http://metroplat.test/arrivals",
       fetchImpl: async () => {
         calls += 1;
         return new Response(JSON.stringify(metroplatResponse()), { status: 202 });
@@ -105,9 +113,17 @@ test("persistent receipt store suppresses a second network admission of the same
   }
 });
 
-test("adapter refuses a non-root URL so a stale /arrivals assumption cannot silently drift", () => {
+test("adapter refuses root so HTTP request observations cannot masquerade as GitHub arrivals", () => {
   assert.throws(
-    () => createMetroplatArrivalAdmit({ url: "http://metroplat.test/arrivals" }),
-    /mounted root/u,
+    () => createMetroplatArrivalAdmit({ url: "http://metroplat.test/" }),
+    /\/arrivals/u,
   );
+});
+
+test("CloudEvent identity is source-bound but ignores the transport delivery identifier", () => {
+  const current = normalizeGitHubEvent(issueEvent());
+  const retry = { ...current, source: { ...current.source, deliveryId: "retry" } };
+  assert.deepEqual(githubDeltaCloudEvent(current), githubDeltaCloudEvent(retry));
+  const renamed = { ...current, source: { ...current.source, repositoryFullName: "red-cup-engineering/renamed" } };
+  assert.notEqual(githubDeltaCloudEvent(current).id, githubDeltaCloudEvent(renamed).id);
 });

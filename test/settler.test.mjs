@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { MemoryReceiptStore, normalizeGitHubEvent, settleGitHubEvent } from '../src/settler.mjs';
+import { MemoryReceiptStore, normalizeGitHubEvent, settleGitHubEvent, settleGitHubEnvelope } from '../src/settler.mjs';
 
 const issueEvent = (overrides = {}) => ({
   action: 'edited',
@@ -223,4 +223,27 @@ test('narrative changes preserve distinct provider events without changing a dec
   assert.equal(a.work.owner,null);
   assert.equal(b.work.owner,null);
   assert.notEqual(a.eventKey,b.eventKey);
+});
+
+
+test('poll-normalized envelopes use the original event-key receipt path',async()=>{
+  const store=new MemoryReceiptStore(),event=issueEvent(),envelope=normalizeGitHubEvent(event);
+  let admissions=0;const admit=async()=>({receiptId:'received-'+(++admissions)});
+  const first=await settleGitHubEnvelope({envelope,receiptStore:store,admit});
+  const replay=await settleGitHubEnvelope({envelope,receiptStore:store,admit});
+  assert.equal(first.state,'RECEIVED');assert.equal(replay.state,'DUPLICATE_RECEIVED');
+  assert.equal(admissions,1);assert.equal(first.receipt.receiptId,replay.receipt.receiptId);
+  const changed=normalizeGitHubEvent(issueEvent({issue:{...event.issue,body:event.issue.body+'new requirement'}}));
+  assert.equal((await settleGitHubEnvelope({envelope:changed,receiptStore:store,admit})).state,'RECEIVED');
+  assert.equal(admissions,2,'changed body with same timestamp must not disappear');
+});
+
+test('poll-normalized settlement rejects tampered provider material',async()=>{
+  const event=normalizeGitHubEvent(issueEvent());let invoked=false;
+  await assert.rejects(settleGitHubEnvelope({
+    envelope:{...event,material:{...event.material,body:'uncommitted mutation'}},
+    receiptStore:new MemoryReceiptStore(),
+    admit:async()=>{invoked=true;return {receiptId:'forged'}}
+  }),/identity/);
+  assert.equal(invoked,false);
 });
