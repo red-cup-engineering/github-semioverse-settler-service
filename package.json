@@ -1,7 +1,7 @@
 {
   "name": "@red-cup-engineering/github-semioverse-settler-service",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "description": "Deterministic GitHub delta normalization, durable event-key receipts, MetroPlat arrival admission, and replay-safe reconciliation.",
   "scripts": {
@@ -24,5 +24,12 @@
     "./native-work-receiving": "./src/native-work-receiving.mjs",
     "./reconcile": "./src/reconcile.mjs",
     "./github-poll": "./src/github-poll.mjs"
-  }
+  },
+  "files": [
+    "package.json",
+    "README*",
+    "LICENSE*",
+    "scripts",
+    "src"
+  ]
 }
