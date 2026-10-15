@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { FileReceiptStore } from "../src/file-receipt-store.mjs";
 import { createMetroplatArrivalAdmit, githubDeltaCloudEvent } from "../src/metroplat-http-admit.mjs";
-import { settleGitHubEvent } from "../src/settler.mjs";
+import { normalizeGitHubEvent, settleGitHubEvent } from "../src/settler.mjs";
 
 function issueEvent() {
   return {
