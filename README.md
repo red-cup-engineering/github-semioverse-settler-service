@@ -6,7 +6,7 @@ This package keeps GitHub provider identity distinct from organizational truth. 
 
 Issue comments, PR review comments, and reviews retain their own provider
 identities and parent links. The arrival retains the exact object material,
-original author, observing actor, repository visibility, and an NI commitment.
+original author, triggering actor, repository visibility, and an NI commitment.
 Material edits on an unchanged PR head and workflow reruns remain distinct;
 transport retries converge. `submission` extracts the Group's public filing
 form fields as testimony, including complaint/requirement/idea distinctions
@@ -16,6 +16,34 @@ The former normalizer discarded this material and keyed some deltas only by
 the parent/head. Its receipts cannot prove reception of the content it dropped.
 The material-bearing event keys deliberately require a new receiving receipt;
 do not migrate old metadata-only receipts as evidence of complete admission.
+
+## Source provenance contract
+
+For issue #1's provider provenance requirement, `source.author`/`authorId`
+identify the material's `object.user`. `source.actor`/`actorId` identify only
+the supplied webhook `sender`, the triggering actor. A repository snapshot
+does not identify who triggered the observed change: polling omits `sender`,
+so both actor fields remain null. The authenticated polling observer is a
+different principal and is not substituted into either source role. Missing
+triggering-actor evidence does not prohibit native admission; the existing
+verified binding, public audience and authenticated native operation port
+continue to govern receiving.
+
+`github-poll.mjs` passes complete issue/PR material and exact PR heads to the
+existing normalizer. No actor inference, new gate or transport is introduced.
+`test/github-poll.test.mjs` covers snapshot attribution and provider identity;
+`test/settler.test.mjs` covers real sender separation and historical receipts;
+`test/native-work-receiving.test.mjs` covers absent-sender admission, exact
+readback/replay, changed provenance/interpretation and audience refusals.
+
+This source correction does not repair historical records. The HTTP settler's
+`eventKey` excludes the triggering actor, although the CloudEvent ID includes
+it. An existing durable event-key receipt can therefore suppress the corrected
+snapshot before transport even when its CloudEvent ID changes. Do not delete,
+relabel or reinterpret those receipts as proof of corrected receiving. Native
+work replay compares the full retained observation, including triggering actor;
+that separate comparison must not be confused with HTTP receipt deduplication.
+Historical correction and independently verified receiving remain separate work.
 
 ## Reconciliation preserves each observed source revision
 
@@ -64,7 +92,7 @@ correction of prior root-URL configuration, with no silent compatibility shim.
 ## Work coordinate reading is not work admission
 
 `normalizeGitHubEvent` preserves the complete source material, author,
-observer, action, revision and NI commitment regardless of whether a work
+triggering actor, action, revision and NI commitment regardless of whether a work
 coordinate can be interpreted. Its existing `work` projection accepts
 scalar declarations only in a complete leading YAML frontmatter envelope or
 an initial sequence of unindented `key: value` lines. It reads the retained
@@ -211,7 +239,7 @@ neither staffing nor customer acceptance.
 
 Replay comparison verifies the recorded source document and compares its full
 observation and supplied native interpretation fields, ignoring only JSON object-key order and
-the transport-only delivery ID. Material, original author, observing actor,
+the transport-only delivery ID. Material, original author, triggering actor,
 visibility, scope, and interpretation remain distinct. A transport retry reuses
 the original recorded document without changing its bytes or NI commitment.
 The receipt names that actual carrier in `sourceDocument` and the offered
@@ -242,16 +270,16 @@ session's CTO incumbency, peer receipt, actuator execution or customer acceptanc
 
 1. normalizes it as `semioverse.github-delta.v1`;
 2. checks a persistent event-key→receipt store;
-3. POSTs an unseen envelope to MetroPlat's generic HTTP arrival boundary;
+3. POSTs an unseen envelope as a supplied CloudEvent to MetroPlat's `/arrivals` boundary;
 4. requires a successful `metroplat.arrival.receipt`;
 5. persists the receipt mapping;
 6. returns `DUPLICATE_RECEIVED` without a second network effect on unchanged replay.
 
-Current MetroPlat source admits generic HTTP material at the **mounted root POST**. The older `/arrivals` description is stale; the adapter refuses a non-root URL so that drift cannot be silently normalized.
+The adapter requires the existing `/arrivals` endpoint. Root POST records an HTTP request observation rather than admitting the supplied CloudEvent; root and unrelated URLs remain refused.
 
 Environment:
 
-- `METROPLAT_ARRIVAL_URL` — required mounted-root URL, for example `http://host:port/`.
+- `METROPLAT_ARRIVAL_URL` — required supplied-CloudEvent URL, for example `http://host:port/arrivals`.
 - `METROPLAT_AUTHORIZATION` — optional Authorization header value supplied by the deployment secret boundary.
 - `GITHUB_SEMIOVERSE_RECEIPT_FILE` — optional durable receipt map path; defaults to `.state/github-semioverse-receipts.json`.
 
@@ -270,5 +298,5 @@ The next runtime slice still owns:
 - automatic SYNC_BACK after receiver outage;
 - downstream semantic projection/readback beyond raw arrival admission.
 
-The focused service tests cover stable provider identity across repository rename, exact PR-head revision binding, persistent replay suppression, and the MetroPlat root-admission contract.
+The focused service tests cover stable provider identity across repository rename, exact PR-head revision binding, persistent replay suppression, and the MetroPlat `/arrivals` contract and root-endpoint refusal.
 

@@ -34,9 +34,9 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
   for (const item of issues) {
     if (item.pull_request) {
       const pull = await getJson("repos/" + repository.full_name + "/pulls/" + encodeURIComponent(String(item.number)));
-      deltas.push(normalizeGitHubEvent({ action: "observed", repository, sender: pull.user ?? item.user ?? null, pull_request: pull }));
+      deltas.push(normalizeGitHubEvent({ action: "observed", repository, pull_request: pull }));
     } else {
-      deltas.push(normalizeGitHubEvent({ action: "observed", repository, sender: item.user ?? null, issue: item }));
+      deltas.push(normalizeGitHubEvent({ action: "observed", repository, issue: item }));
     }
   }
   return deltas.sort((left, right) => String(left.source.occurredAt ?? "").localeCompare(String(right.source.occurredAt ?? "")) || left.eventKey.localeCompare(right.eventKey));

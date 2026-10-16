@@ -7,12 +7,12 @@ test("poller paginates and preserves exact PR head revision", async () => {
   const getJson = async path => {
     calls.push(path);
     if (path === "repos/red-cup-engineering/x/issues?state=open&per_page=100&page=1") return [
-      { number: 1, id: 10, node_id: "I_1", updated_at: "2026-10-07T15:00:00Z", html_url: "https://github.com/red-cup-engineering/x/issues/1", user: { login: "agent" } },
-      { number: 2, id: 20, node_id: "PR_2", pull_request: {}, updated_at: "2026-10-07T15:01:00Z", html_url: "https://github.com/red-cup-engineering/x/pull/2", user: { login: "agent" } },
+      { number: 1, id: 10, node_id: "I_1", updated_at: "2026-10-07T15:00:00Z", html_url: "https://github.com/red-cup-engineering/x/issues/1", user: { id: 31, login: "author" } },
+      { number: 2, id: 20, node_id: "PR_2", pull_request: {}, updated_at: "2026-10-07T15:01:00Z", html_url: "https://github.com/red-cup-engineering/x/pull/2", user: { id: 31, login: "author" } },
     ];
     if (path === "repos/red-cup-engineering/x/pulls/2") return {
       node_id: "PR_2", number: 2, head: { sha: "head-2" }, updated_at: "2026-10-07T15:01:00Z",
-      html_url: "https://github.com/red-cup-engineering/x/pull/2", user: { login: "agent" },
+      html_url: "https://github.com/red-cup-engineering/x/pull/2", user: { id: 31, login: "author" },
     };
     throw new Error("unexpected path " + path);
   };
@@ -23,6 +23,16 @@ test("poller paginates and preserves exact PR head revision", async () => {
   assert.equal(rows[0].source.objectType, "issue");
   assert.equal(rows[1].source.objectType, "pull_request");
   assert.equal(rows[1].source.revision, "head-2");
+  for (const [index, row] of rows.entries()) {
+    assert.equal(row.source.actor, null);
+    assert.equal(row.source.actorId, null);
+    assert.equal(row.source.author, "author");
+    assert.equal(row.source.authorId, 31);
+    assert.equal(row.source.repositoryId, 561);
+    assert.equal(row.source.objectId, index === 0 ? "I_1" : "PR_2");
+    assert.deepEqual(row.material.user, { id: 31, login: "author" });
+    assert.equal(row.material.html_url, row.source.url);
+  }
   assert.ok(calls.includes("repos/red-cup-engineering/x/pulls/2"));
 });
 

@@ -13,7 +13,7 @@ const setFields = new Set(['scope','tags','serves','after','supersedes','relates
 const openingFieldEqual = (key,left,right) => key==='evidence' ? evidenceEqual(left,right) : setFields.has(key) ? equal([...new Set(left??[])].sort(),[...new Set(right??[])].sort()) : equal(left,right);
 
 // Delivery identity belongs to transport. Every other observation field,
-// including material, author, observing actor and visibility, still participates.
+// including material, author, triggering actor and visibility, still participates.
 function observationForReplay(envelope) {
   const { deliveryId, ...source } = envelope.source ?? {};
   return { ...envelope, source };
