@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { githubDeltaCloudEvent } from '../src/metroplat-http-admit.mjs';
 import { MemoryReceiptStore, normalizeGitHubEvent, settleGitHubEvent, settleGitHubEnvelope } from '../src/settler.mjs';
 
 const issueEvent = (overrides = {}) => ({
@@ -246,4 +247,38 @@ test('poll-normalized settlement rejects tampered provider material',async()=>{
     admit:async()=>{invoked=true;return {receiptId:'forged'}}
   }),/identity/);
   assert.equal(invoked,false);
+});
+
+test('webhook sender is the triggering actor, separate from the material author', () => {
+  const event = issueEvent({ sender: { node_id: 'sender-5', login: 'editor' } });
+  event.issue.user = { node_id: 'author-3', login: 'customer' };
+  const webhook = normalizeGitHubEvent(event);
+  assert.equal(webhook.source.actor, 'editor');
+  assert.equal(webhook.source.actorId, 'sender-5');
+  assert.equal(webhook.source.author, 'customer');
+  assert.equal(webhook.source.authorId, 'author-3');
+  delete event.sender;
+  const snapshot = normalizeGitHubEvent(event);
+  assert.equal(snapshot.source.actor, null);
+  assert.equal(snapshot.source.actorId, null);
+  assert.equal(snapshot.source.author, 'customer');
+  assert.deepEqual(snapshot.material, webhook.material);
+  assert.equal(snapshot.providerObjectKey, webhook.providerObjectKey);
+  assert.equal(snapshot.source.revision, webhook.source.revision);
+});
+
+test('actor correction does not repair an existing event-key receipt', async () => {
+  const event = issueEvent({ action: 'observed', sender: undefined });
+  event.issue.user = { id: 3, login: 'customer' };
+  const corrected = normalizeGitHubEvent(event);
+  const historical = normalizeGitHubEvent({ ...event, sender: event.issue.user });
+  assert.equal(corrected.eventKey, historical.eventKey);
+  assert.notEqual(githubDeltaCloudEvent(corrected).id, githubDeltaCloudEvent(historical).id);
+  const receiptStore = new MemoryReceiptStore();
+  const oldReceipt = { receiptId: 'historical-arrival' };
+  receiptStore.put(historical.eventKey, oldReceipt);
+  const result = await settleGitHubEnvelope({ envelope: corrected, receiptStore,
+    admit: async () => assert.fail('an existing receipt suppresses a corrected observation') });
+  assert.equal(result.state, 'DUPLICATE_RECEIVED');
+  assert.deepEqual(receiptStore.get(historical.eventKey), oldReceipt);
 });

@@ -101,7 +101,7 @@ for (const variant of ['property order', 'delivery retry']) {
   });
 }
 
-for (const variant of ['material', 'author', 'observer', 'scope', 'interpretation']) {
+for (const variant of ['material', 'author', 'triggering actor', 'scope', 'interpretation']) {
   test(`native replay does not collapse changed ${variant}`, async () => {
     const original = input();
     const first = prepareGitHubWork(original);
@@ -109,7 +109,7 @@ for (const variant of ['material', 'author', 'observer', 'scope', 'interpretatio
     const changed = structuredClone(original);
     if (variant === 'material') changed.event.issue.body = 'A materially different complaint';
     if (variant === 'author') changed.event.issue.user = { id: 4, login: 'different-author' };
-    if (variant === 'observer') changed.event.sender = { id: 5, login: 'different-observer' };
+    if (variant === 'triggering actor') changed.event.sender = { id: 5, login: 'different-triggering-actor' };
     if (variant === 'scope') changed.binding.scope = ['service:other'];
     if (variant === 'interpretation') changed.opening.observation = 'A different explicit interpretation';
     const next = prepareGitHubWork(changed);
@@ -201,4 +201,35 @@ test('same-condition report cannot pretend changed context was retained by corro
 for(const field of ['context','tags'])test(`same-condition report cannot silently remove fixed ${field}`,async()=>{
  const request=input();request.opening={...request.opening,law:'github-issue-open',subject:request.event.issue.html_url,context:'Original context',tags:['original']};const prior=stored(prepareGitHubWork(request));delete request.opening[field];const prepared=prepareGitHubWork(request);let writes=0;
  await assert.rejects(receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return {position:'one',matched:1,threads:[prior]};}}),/cannot retain changed interpretation/);assert.equal(writes,0);
+});
+
+test('a snapshot without a sender is admitted and exact replay does not open again', async () => {
+  const prepared = prepareGitHubWork(input());
+  assert.equal(prepared.envelope.source.actor, null);
+  assert.equal(prepared.envelope.source.actorId, null);
+  assert.equal(prepared.envelope.source.author, 'customer');
+  let actual;
+  let opens = 0;
+  const call = async (verb, args) => {
+    if (verb === 'work-open') {
+      opens++;
+      actual = stored(prepared);
+      return { id: actual.id };
+    }
+    assert.equal(verb, 'work-board');
+    return { position: 'one', threads: actual ? [actual] : [], matched: actual ? 1 : 0 };
+  };
+  const admitted = await receivePreparedGitHubWork({ prepared, call });
+  assert.equal(admitted.replay, false);
+  assert.equal(admitted.stages.sourceRetained, true);
+  const replay = await receivePreparedGitHubWork({ prepared: prepareGitHubWork(input()), call });
+  assert.equal(opens, 1);
+  assert.equal(replay.replay, true);
+  assert.equal(replay.thread, admitted.thread);
+  assert.equal(replay.sourceDocument, admitted.sourceDocument);
+  const recovered = readGitHubSourceDocument(actual.opening.sources[1]);
+  assert.equal(recovered.source.actor, null);
+  assert.equal(recovered.source.actorId, null);
+  assert.equal(recovered.source.author, 'customer');
+  assert.equal(recovered.material.body, 'Original customer words');
 });
