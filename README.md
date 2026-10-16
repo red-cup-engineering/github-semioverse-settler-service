@@ -300,3 +300,17 @@ The next runtime slice still owns:
 
 The focused service tests cover stable provider identity across repository rename, exact PR-head revision binding, persistent replay suppression, and the MetroPlat `/arrivals` contract and root-endpoint refusal.
 
+
+## Receipt writer exclusion and recovery
+
+A live FileReceiptStore writer keeps its lock regardless of age. A competing
+writer receives `RECEIPT_STORE_LOCK_HELD`; it must retain its uncommitted event,
+not report receiving. The writer verifies its directory identity and owner token
+before publishing the new receipt map and never cleans up a replacement lock.
+Dead, missing or unreadable owners yield `RECEIPT_STORE_LOCK_RECOVERY_REQUIRED`.
+No automatic stale-lock rename/removal remains: portable filesystem operations
+do not provide atomic compare-and-rename, so competing reclaimers could remove
+a new live owner's lock. Recovery requires exclusive owner quiescence and receipt
+reconciliation before removing the inspected abandoned lock. No recovery actuator
+is supplied here. This is local-process exclusion, not distributed fencing or
+power-loss durability; all cooperating writers must use the same protocol.

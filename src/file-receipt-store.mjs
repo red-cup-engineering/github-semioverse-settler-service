@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-const RECEIPT_STORE_LOCK_STALE_AFTER_MS = 30_000;
+// A paused live writer never loses its lock merely because time passed.
 
 function readStore(path) {
   try {
@@ -42,77 +42,58 @@ function processIsAlive(pid) {
   }
 }
 
-function lockIsStale(lockPath, nowMs = Date.now()) {
-  const ownerPath = join(lockPath, "owner.json");
-  const owner = readJsonOrNull(ownerPath);
-  if (owner === null) {
-    try {
-      return nowMs - statSync(lockPath).mtimeMs >= RECEIPT_STORE_LOCK_STALE_AFTER_MS;
-    } catch (error) {
-      if (error?.code === "ENOENT") return false;
-      throw error;
-    }
-  }
-
-  const acquiredAtMs = Date.parse(owner.acquiredAt);
-  const ageMs = Number.isFinite(acquiredAtMs) ? nowMs - acquiredAtMs : Number.POSITIVE_INFINITY;
-  return ageMs >= RECEIPT_STORE_LOCK_STALE_AFTER_MS || !processIsAlive(owner.pid);
+function lockError(code, message) {
+  const error = new Error(message); error.code = code; return error;
 }
 
 function acquireLock(lockPath) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const owner = Object.freeze({
-      lockId: randomUUID(),
-      pid: process.pid,
-      acquiredAt: new Date().toISOString(),
-    });
-
-    try {
-      mkdirSync(lockPath, { mode: 0o700 });
-      try {
-        writeFileSync(join(lockPath, "owner.json"), `${JSON.stringify(owner, null, 2)}\n`, {
-          encoding: "utf8",
-          mode: 0o600,
-          flag: "wx",
-        });
-      } catch (error) {
-        rmSync(lockPath, { recursive: true, force: true });
-        throw error;
-      }
-      return owner;
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      if (!lockIsStale(lockPath)) {
-        const held = new Error("receipt store lock is already held");
-        held.code = "RECEIPT_STORE_LOCK_HELD";
-        throw held;
-      }
-
-      const quarantinePath = `${lockPath}.stale-${randomUUID()}`;
-      try {
-        renameSync(lockPath, quarantinePath);
-      } catch (renameError) {
-        if (renameError?.code === "ENOENT") continue;
-        throw renameError;
-      }
-      rmSync(quarantinePath, { recursive: true, force: true });
-    }
+  const owner = Object.freeze({ lockId: randomUUID(), pid: process.pid,
+    acquiredAt: new Date().toISOString() });
+  try { mkdirSync(lockPath, { mode: 0o700 }); }
+  catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    // Never rename/delete a lock based on a prior observation: there is no
+    // atomic compare-and-rename in this portable filesystem protocol. Another
+    // contender could have replaced a dead owner between the read and rename.
+    let held;
+    try { held = readJsonOrNull(join(lockPath, "owner.json")); }
+    catch { throw lockError("RECEIPT_STORE_LOCK_RECOVERY_REQUIRED", "receipt lock owner is unreadable; exclusive owner recovery required"); }
+    if (held && processIsAlive(held.pid))
+      throw lockError("RECEIPT_STORE_LOCK_HELD", "receipt store lock is already held; live locks do not expire");
+    throw lockError("RECEIPT_STORE_LOCK_RECOVERY_REQUIRED", "receipt lock has no verified live owner; exclusive owner recovery required");
   }
-
-  const error = new Error("could not acquire receipt store lock after stale-lock recovery");
-  error.code = "RECEIPT_STORE_LOCK_RECOVERY_FAILED";
-  throw error;
+  const identity = statSync(lockPath);
+  const sameDirectory = () => {
+    try { const current = statSync(lockPath); return current.dev === identity.dev && current.ino === identity.ino; }
+    catch (error) { if (error?.code === "ENOENT") return false; throw error; }
+  };
+  try {
+    writeFileSync(join(lockPath, "owner.json"), `${JSON.stringify(owner, null, 2)}\n`, {
+      encoding: "utf8", mode: 0o600, flag: "wx",
+    });
+  } catch (error) {
+    // Leave ambiguous/incomplete ownership for exclusive recovery. Never
+    // recursively remove an unverified lock while another owner might exist.
+    throw error;
+  }
+  const owns = () => {
+    if (!sameDirectory()) return false;
+    try { return readJsonOrNull(join(lockPath, "owner.json"))?.lockId === owner.lockId; }
+    catch { return false; }
+  };
+  const assertOwned = () => {
+    if (!owns()) throw lockError("RECEIPT_STORE_LOCK_LOST", "receipt store lock ownership changed; refusing publication");
+  };
+  return { owns, assertOwned };
 }
 
 function withLock(lockPath, action) {
-  const owner = acquireLock(lockPath);
+  const lock = acquireLock(lockPath);
   try {
-    return action();
+    lock.assertOwned();
+    return action(lock.assertOwned);
   } finally {
-    const current = readJsonOrNull(join(lockPath, "owner.json"));
-    if (current?.lockId === owner.lockId) {
-      rmSync(lockPath, { recursive: true, force: true });
-    }
+    if (lock.owns()) rmSync(lockPath, { recursive: true, force: true });
   }
 }
 
@@ -144,19 +125,25 @@ export class FileReceiptStore {
     }
 
     mkdirSync(dirname(this.path), { recursive: true });
-    return withLock(this.lockPath, () => {
+    return withLock(this.lockPath, (assertOwned) => {
       const current = readStore(this.path);
       if (Object.hasOwn(current, eventKey)) {
         throw new Error("receipt already exists for eventKey");
       }
       const next = { ...current, [eventKey]: receipt };
-      const temporary = `${this.path}.${process.pid}.tmp`;
+      const temporary = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
       writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, {
         encoding: "utf8",
         mode: 0o600,
       });
-      renameSync(temporary, this.path);
-      return receipt;
+      try {
+        assertOwned();
+        renameSync(temporary, this.path);
+        assertOwned();
+        return receipt;
+      } finally {
+        rmSync(temporary, { force: true });
+      }
     });
   }
 
