@@ -4,6 +4,11 @@
   "private": false,
   "type": "module",
   "description": "Deterministic GitHub delta normalization, durable event-key receipts, MetroPlat arrival admission, and replay-safe reconciliation.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/red-cup-engineering/git-services-section.git",
+    "directory": "services/github-semioverse-settler-service"
+  },
   "scripts": {
     "check": "node --check src/settler.mjs && node --check src/file-receipt-store.mjs && node --check src/metroplat-http-admit.mjs && node --check src/native-work-receiving.mjs && node --check src/reconcile.mjs && node --check src/github-poll.mjs && node --check scripts/settle-github-event.mjs && node --check scripts/observe-github.mjs && node --check test/settler.test.mjs && node --check test/runtime-edge.test.mjs && node --check test/reconcile.test.mjs && node --check test/github-poll.test.mjs",
     "test": "node --test test/*.test.mjs",
