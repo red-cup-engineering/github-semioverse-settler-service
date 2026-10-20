@@ -366,7 +366,13 @@ The original `settle-github-event` and `reconcile-github` commands share one
 The upstream ActivityPub `deliverActivity` result with
 `ActivityPubDeliveryReceipt.delivered=true` establishes only its **transport
 submission**, not receiver Work admission. The source-owned
-`FileReceiptStore.claim` is acquired before sending; the Actor transport
+`FileReceiptStore.claim` is acquired before sending and keyed by the **complete
+source CloudEvent NI**, namespaced for the Actor route, rather than by the
+legacy material-only GitHub `eventKey`. The original key does not distinguish
+a change to the triggering GitHub actor, repository alias or visibility;
+using its old HTTP receipt would silently suppress distinct source testimony.
+The explicit Actor namespace preserves every original HTTP receipt as
+historical evidence without upgrading it to signed-Actor proof. The Actor transport
 returns `PENDING_RECEIVER_READBACK` and retains the claim instead of inserting
 a fake `receiptId`. The initial result exposes the source event NI, sender and
 recipient Actor URIs and Activity ID; a subsequent run sees the same held claim
