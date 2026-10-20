@@ -137,6 +137,25 @@ test("private or unknown GitHub audience, forged identity, and wrong recipient r
   assert.equal(envelope.source.visibility,"public");
 });
 
+test("representation preflight rejects a nonpublic source before opening durable claims or any Actor transport", async t => {
+  const root = mkdtempSync(join(tmpdir(), "github-actor-preflight-"));
+  t.after(() => rmSync(root, {recursive:true,force:true}));
+  const store = new FileReceiptStore(join(root, "receipts.json"));
+  const privateEvent = sourceEvent();
+  privateEvent.repository.private = true;
+  let sent = 0;
+  const admit = createMetroplatActorSubmission({...actor,deliver: async () => {sent++;throw new Error("must not send");}});
+  assert.equal(typeof admit.preflight, "function");
+  await assert.rejects(
+    settleGitHubEvent({event:privateEvent,receiptStore:store,admit}),
+    /public Actor audience/u,
+  );
+  const privateKey = normalizeGitHubEvent(privateEvent).eventKey;
+  assert.equal(store.get(privateKey), null);
+  assert.equal(store.getClaim(privateKey), null, "known invalid content is not a ghost pending effect");
+  assert.equal(sent,0);
+});
+
 test("transport selection preserves the existing received /arrivals route and never downgrades failed Actor configuration", async () => {
   const http = await selectGitHubSemioverseTransport({
     environment:{METROPLAT_ARRIVAL_URL:"https://cold-red-gate.561.group/arrivals"},
