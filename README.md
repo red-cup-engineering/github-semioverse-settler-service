@@ -208,8 +208,13 @@ partial searches, pagination drift, API errors, and size/time bounds produce
 `github.coverage-incomplete` and exit 1. Search results beyond GitHub's 1,000
 result limit, or an explicitly exhausted search quota, fall back to paginated
 repository issue endpoints. An exhausted search quota is not retried during
-that observation. Calls run
-serially with bounded response sizes. Discovery includes archived repositories
+that observation. Search requests use 100 items per page, with at most ten pages for the
+provider's 1,000-result ceiling; ordinary repository, branch, status, check and
+review endpoints retain their existing 30-item pages. The larger Search page
+reduces calls against its separate quota without changing scope or treating
+partial results as complete. A changed Search total restarts only that query;
+repeated identities, premature pages and incomplete provider results still
+refuse coverage. Calls run serially with bounded response sizes. Discovery includes archived repositories
 so unresolved original obligations are not erased by an archive flag.
 
 It deliberately does **not** make GitHub canonical, infer authority from repository names, or call an LLM on the happy path.

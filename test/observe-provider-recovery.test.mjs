@@ -31,10 +31,22 @@ if(path.startsWith('search/issues?')){
  if(mode==='quota')refuse('gh: API rate limit exceeded (HTTP 403)');
  const closed=path.includes('is%3Aclosed'),page=Number(new URL('https://api.github.test/'+path).searchParams.get('page'));
  if(mode==='moving-search'&&!closed||mode==='moving-closed-search'&&closed||mode==='continuous-search'&&!closed){
-  const all=Array.from({length:32},(_,i)=>{const row={...item,id:(closed?100:0)+i+1,number:i+1,state:closed?'closed':'open'};delete row.pull_request;return row;});
+  const all=Array.from({length:132},(_,i)=>{const row={...item,id:(closed?100:0)+i+1,number:i+1,state:closed?'closed':'open'};delete row.pull_request;return row;});
   if(page===1&&attempt===1){all[0].id=9001;all[0].number=9001;} // belongs only to the discarded population
-  const total=mode==='continuous-search'?30+attempt*2+(page===2?1:0):page===1&&attempt===1?31:32;
-  out({total_count:total,incomplete_results:false,items:all.slice((page-1)*30,page*30)});
+  const total=mode==='continuous-search'?130+attempt*2+(page===2?1:0):page===1&&attempt===1?131:132;
+  out({total_count:total,incomplete_results:false,items:all.slice((page-1)*100,page*100)});
+ }
+ if(mode.startsWith('search-')){
+  if(closed)out({total_count:0,incomplete_results:false,items:[]});
+  const size=Number(new URL('https://api.github.test/'+path).searchParams.get('per_page'));
+  if(size!==100)refuse('Search must request 100 items');
+  if(mode==='search-over-limit')out({total_count:1001,incomplete_results:false,items:[]});
+  const count=mode==='search-limit'?1000:201;
+  const all=Array.from({length:count},(_,i)=>{const row={...item,id:i+1,number:i+1};delete row.pull_request;return row;});
+  if(mode==='search-duplicate')all[100]=all[0];
+  let items=all.slice((page-1)*size,page*size);
+  if(mode==='search-premature'&&page===2)items=items.slice(0,1);
+  out({total_count:count,incomplete_results:mode==='search-incomplete',items});
  }
  out({total_count:path.includes('is%3Aclosed')?0:1,incomplete_results:false,items:path.includes('is%3Aclosed')?[]:[item]});
 }
@@ -163,7 +175,7 @@ for(const mode of ['moving-search','moving-closed-search']) test(`${mode} discar
   assert.equal(queries.length,2);
   assert.ok(queries.every(([,count])=>count===2));
   const issues=result.rows.filter(row=>row.kind==='github.issue');
-  assert.equal(issues.length,32);
+  assert.equal(issues.length,132);
   assert.equal(issues.some(row=>row.number===9001),false);
   assert.equal(result.calls['repos/emsenn/example/branches?per_page=30&page=1'],1);
   assert.equal(Object.keys(result.calls).some(path=>path.includes('/issues?state=')),false);
@@ -212,3 +224,28 @@ for (const mode of ['branch-permission', 'branch-duplicate', 'branch-base', 'bra
   assert.equal(result.rows.some(row => row.kind === 'github.coverage-complete'), false);
 });
 
+
+for (const [mode, count, pages] of [['search-pages', 201, 3], ['search-limit', 1000, 10]]) test(`${mode} consumes complete 100-item Search pages within the original result ceiling`, () => {
+  const result = observe(mode);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.rows.filter(row => row.kind === 'github.issue').length, count);
+  const open = Object.keys(result.calls).filter(path => path.startsWith('search/issues?') && path.includes('is%3Aopen'));
+  assert.equal(open.length, pages);
+  assert.ok(open.every(path => path.includes('per_page=100')));
+  assert.equal(Object.keys(result.calls).some(path => path.includes('/issues?state=')), false);
+  assert.equal(result.rows.at(-1).kind, 'github.coverage-complete');
+});
+test('Search over 1000 results retains discovered repository fallback without reading an eleventh page', () => {
+  const result = observe('search-over-limit');
+  assert.equal(result.status, 0, result.stderr);
+  const open = Object.keys(result.calls).filter(path => path.startsWith('search/issues?') && path.includes('is%3Aopen'));
+  assert.equal(open.length, 1);
+  assert.equal(result.calls['repos/emsenn/example/issues?state=open&sort=created&direction=asc&per_page=30&page=1'], 1);
+  assert.equal(result.rows.at(-1).kind, 'github.coverage-complete');
+});
+for (const mode of ['search-duplicate', 'search-premature', 'search-incomplete']) test(`${mode} refuses complete coverage at the larger Search page size`, () => {
+  const result = observe(mode);
+  assert.equal(result.status, 1);
+  assert.equal(result.rows.some(row => row.kind === 'github.coverage-complete'), false);
+  assert.equal(result.rows.at(-1).kind, 'github.coverage-incomplete');
+});
