@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { setTimeout as wait } from 'node:timers/promises';
 import { FileReceiptStore } from '../src/file-receipt-store.mjs';
-import { retainIntegrationEvent as retain, integrationEvidenceId as id } from '../../../src/integration-eligibility.mjs';
+import { retainIntegrationEvent as retain, integrationEvidenceId as id } from '@red-cup-engineering/git-services-section/integration-eligibility';
 
 const target={repository:'house/source',repositoryId:7,number:83},head='a'.repeat(40),base='b'.repeat(40),at='2026-10-16T15:00:00Z',now='2026-10-16T16:00:00Z';
 const observation={target,head,expectedHead:head,baseHead:base,baseRef:'main',authorId:1,draft:false,open:true,mergeable:true,
@@ -17,7 +17,7 @@ const request=event=>({target:event.target,event,now,maxAgeMs:7200000});
 const apply=(path,event)=>retain({...request(event),store:new FileReceiptStore(path)});
 function worker(path,event,{pauseMs=0,gate,ready,fence=false,age=false}={}){
  const storeUrl=new URL('../src/file-receipt-store.mjs',import.meta.url).href;
- const reducerUrl=new URL('../../../src/integration-eligibility.mjs',import.meta.url).href;
+ const reducerUrl=import.meta.resolve('@red-cup-engineering/git-services-section/integration-eligibility');
  const code=`import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';
  const path=${JSON.stringify(path)},opts=${JSON.stringify({pauseMs,gate,ready,fence,age})};const original=fs.writeFileSync;
  let paused=false;fs.writeFileSync=function(name,...args){

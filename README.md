@@ -140,7 +140,7 @@ or failed page refuses complete coverage. Owner and repository selectors cannot
 be mixed. For example, from this service directory:
 
 ```sh
-node scripts/observe-github.mjs --repository emsenn/cold-red-gate --pull-checks
+node scripts/observe-github.mjs --repository red-cup-engineering/github-semioverse-settler-service --pull-checks
 ```
 
 Repository-scoped completion and owner-count rows explicitly name
@@ -405,3 +405,23 @@ installed MetroPlat instance, read the native source identity, demonstrate
 idempotent recovery and the separated receiver-owned acceptance decision, and
 only then consider changing a live host's selection. Signed delivery is not
 automatically authority to originate Work.
+
+## Standalone source qualification
+
+The receipt-store concurrency tests exercise the real Git integration reducer
+through its declared public package export. Its exact Git0.1.7 development
+dependency belongs to source qualification; it is not part of this service's
+production ActivityPub transport dependency. The tests and child processes
+resolve that same installed export independently of the checkout's parent
+directory. Preserve the live-writer pause, stale-lock fencing, conflicting
+stream and dead-owner refusal cases when receiving this standalone repository.
+
+Version0.1.2 is a deliberate successor: registry0.1.1 was already occupied
+when this candidate was received. Native tests, published bytes, signed Actor
+delivery, receiver-correlated admission and useful Work remain distinct
+receiving stages. Existing pending claims require reconciliation before resend.
+
+The repository projects the original Computer Operations0.1.2 issue/PR form
+family, including ANT (Autonomous National Territory), Sovereign Service
+Enterprise, and native Message/Work receiving continuity. These fields retain
+source testimony and return addresses; the native receiver verifies authority.
