@@ -113,6 +113,13 @@ export function createMetroplatActorSubmission({
   // calling the effect port. A successful transport may never be put into
   // the Semioverse admission receipt store.
   Object.defineProperty(admit, "requiresDurableClaim", { value: true });
+  // The original GitHub material-only eventKey does not bind the changed
+  // author, triggering actor, repository alias or visibility. Actor delivery
+  // must claim the *complete source CloudEvent NI*, not reuse a historic HTTP
+  // receipt for different actor testimony. Delivery ID alone is excluded.
+  Object.defineProperty(admit, "receiptKey", {
+    value: envelope => "activitypub:github-delta:" + githubDeltaCloudEvent(envelope).id,
+  });
   // Reject deterministic representation/audience defects before claiming a
   // durable in-flight effect. The delivered activity is independently formed
   // under the real send instant; preflight itself cannot issue a message.
