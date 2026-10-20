@@ -1,15 +1,15 @@
 {
   "name": "@red-cup-engineering/github-semioverse-settler-service",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": false,
   "type": "module",
-  "description": "Deterministic GitHub delta normalization, durable event-key receipts, MetroPlat arrival admission, and replay-safe reconciliation.",
+  "description": "Deterministic GitHub delta normalization with replay-safe MetroPlat CloudEvents HTTP receiving or signed ActivityPub++ Actor submission pending native readback.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/red-cup-engineering/github-semioverse-settler-service.git"
   },
   "scripts": {
-    "check": "node --check src/settler.mjs && node --check src/file-receipt-store.mjs && node --check src/metroplat-http-admit.mjs && node --check src/native-work-receiving.mjs && node --check src/reconcile.mjs && node --check src/github-poll.mjs && node --check scripts/settle-github-event.mjs && node --check scripts/observe-github.mjs && node --check test/settler.test.mjs && node --check test/runtime-edge.test.mjs && node --check test/reconcile.test.mjs && node --check test/github-poll.test.mjs",
+    "check": "node --check src/settler.mjs && node --check src/file-receipt-store.mjs && node --check src/metroplat-http-admit.mjs && node --check src/metroplat-actor-delivery.mjs && node --check src/transport-selection.mjs && node --check src/native-work-receiving.mjs && node --check src/reconcile.mjs && node --check src/github-poll.mjs && node --check scripts/settle-github-event.mjs && node --check scripts/observe-github.mjs && node --check test/settler.test.mjs && node --check test/runtime-edge.test.mjs && node --check test/actor-transport.test.mjs && node --check test/reconcile.test.mjs && node --check test/github-poll.test.mjs",
     "test": "node --test test/*.test.mjs",
     "verify": "npm run check && npm test"
   },
@@ -27,7 +27,9 @@
     "./metroplat-http-admit": "./src/metroplat-http-admit.mjs",
     "./native-work-receiving": "./src/native-work-receiving.mjs",
     "./reconcile": "./src/reconcile.mjs",
-    "./github-poll": "./src/github-poll.mjs"
+    "./github-poll": "./src/github-poll.mjs",
+    "./metroplat-actor-delivery": "./src/metroplat-actor-delivery.mjs",
+    "./transport-selection": "./src/transport-selection.mjs"
   },
   "files": [
     "package.json",
@@ -35,5 +37,11 @@
     "LICENSE*",
     "scripts",
     "src"
-  ]
+  ],
+  "dependencies": {
+    "@red-cup-engineering/activitypub-services-section": "0.8.4"
+  },
+  "devDependencies": {
+    "@red-cup-engineering/git-services-section": "0.1.7"
+  }
 }

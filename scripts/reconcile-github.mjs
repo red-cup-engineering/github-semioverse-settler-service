@@ -1,16 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { FileReceiptStore } from "../src/file-receipt-store.mjs";
-import { createMetroplatArrivalAdmit } from "../src/metroplat-http-admit.mjs";
+import { selectGitHubSemioverseTransport } from "../src/transport-selection.mjs";
 import { collectGitHubRepositories } from "../src/github-poll.mjs";
 import { reconcileGitHubDeltas } from "../src/reconcile.mjs";
 import { settleGitHubEnvelope } from "../src/settler.mjs";
-
-const required = name => {
-  const value = process.env[name];
-  if (typeof value !== "string" || value.trim() === "") throw new Error(name + " is required");
-  return value.trim();
-};
 
 const api = path => JSON.parse(execFileSync("gh", ["api", path], {
   encoding: "utf8",
@@ -44,12 +38,7 @@ const deltas = await collectGitHubRepositories({
 const store = new FileReceiptStore(
   process.env.GITHUB_SEMIOVERSE_RECEIPT_FILE ?? ".state/github-semioverse-receipts.json",
 );
-const admit = createMetroplatArrivalAdmit({
-  url: required("METROPLAT_ARRIVAL_URL"),
-  ...(process.env.METROPLAT_AUTHORIZATION === undefined
-    ? {}
-    : { authorization: process.env.METROPLAT_AUTHORIZATION }),
-});
+const admit = await selectGitHubSemioverseTransport();
 
 const result = await reconcileGitHubDeltas({
   list: async () => deltas.map(envelope => ({

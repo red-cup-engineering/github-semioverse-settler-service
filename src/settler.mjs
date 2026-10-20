@@ -217,7 +217,8 @@ function clearSettledClaim(receiptStore, eventKey) {
 }
 
 const receiptOutcome = (receipt) => Object.freeze({ kind: 'RECEIPT', receipt });
-const pendingOutcome = (claim) => Object.freeze({ kind: 'PENDING', claim });
+const pendingOutcome = (claim, transport) => Object.freeze({ kind: 'PENDING', claim,
+  ...(transport === undefined ? {} : { transport }) });
 
 function exposedResult(state, envelope, outcome) {
   if (outcome.kind === 'PENDING') {
@@ -225,6 +226,7 @@ function exposedResult(state, envelope, outcome) {
       state: 'PENDING_RECEIVER_READBACK',
       envelope,
       claim: outcome.claim,
+      ...(outcome.transport === undefined ? {} : { transport: outcome.transport }),
     });
   }
   return Object.freeze({ state, envelope, receipt: outcome.receipt });
@@ -258,31 +260,52 @@ export async function settleGitHubEnvelope({ envelope, receiptStore, admit }) {
     throw new TypeError('receiptStore get/put interface is required');
   }
   if (typeof admit !== 'function') throw new TypeError('admit function is required');
-  const existing = receiptStore.get(envelope.eventKey);
+  // Source events sent by a commissioned Actor have a distinct, complete
+  // CloudEvent NI receipt identity. The older HTTP adapter keeps the original
+  // eventKey for its already persisted native arrival receipts; never
+  // reinterpret old metadata-only receipts as full signed Actor receiving.
+  const receiptKey = typeof admit.receiptKey === 'function'
+    ? admit.receiptKey(envelope) : envelope.eventKey;
+  if (typeof receiptKey !== 'string' || receiptKey.length > 2048 || !receiptKey)
+    throw new TypeError('Semioverse receipt identity must be bounded nonempty text');
+  if (admit.requiresDurableClaim === true &&
+      !/^activitypub:github-delta:ni:\/\/\/sha-256;[A-Za-z0-9_-]{43}$/u.test(receiptKey))
+    throw new TypeError('signed Actor receipt identity must name the exact source CloudEvent NI');
+  const existing = receiptStore.get(receiptKey);
   if (existing) {
-    clearSettledClaim(receiptStore, envelope.eventKey);
+    clearSettledClaim(receiptStore, receiptKey);
     return Object.freeze({ state: 'DUPLICATE_RECEIVED', envelope, receipt: existing });
   }
 
   const inflight = inflightFor(receiptStore);
-  const pending = inflight.get(envelope.eventKey);
+  const pending = inflight.get(receiptKey);
   if (pending !== undefined) {
     const outcome = await pending;
     return exposedResult('DUPLICATE_RECEIVED', envelope, outcome);
   }
 
   const durableClaims = hasDurableClaimInterface(receiptStore);
+  // A signed ActivityPub delivery is an uncertain effect until the real
+  // receiver's native arrival/Work readback is observed. It cannot run
+  // without a durable pre-effect claim; in-memory coalescing is not enough.
+  if (admit.requiresDurableClaim === true && !durableClaims)
+    throw new TypeError('Actor submission requires a durable receiver-readback claim before delivery');
+  if (typeof admit.preflight === 'function') {
+    const preflight = admit.preflight(envelope);
+    if (preflight && typeof preflight.then === 'function')
+      throw new TypeError('Actor representation preflight must complete before an effect claim');
+  }
   const admission = (async () => {
     let claim = null;
     if (durableClaims) {
-      const claimResult = receiptStore.claim(envelope.eventKey);
+      const claimResult = receiptStore.claim(receiptKey);
       if (!claimResult || (claimResult.state !== 'ACQUIRED' && claimResult.state !== 'EXISTS')) {
         throw new Error('receiptStore claim must return ACQUIRED or EXISTS');
       }
       if (claimResult.state === 'EXISTS') {
-        const racedReceipt = receiptStore.get(envelope.eventKey);
+        const racedReceipt = receiptStore.get(receiptKey);
         if (racedReceipt) {
-          clearSettledClaim(receiptStore, envelope.eventKey);
+          clearSettledClaim(receiptStore, receiptKey);
           return receiptOutcome(racedReceipt);
         }
         return pendingOutcome(claimResult.claim);
@@ -290,27 +313,45 @@ export async function settleGitHubEnvelope({ envelope, receiptStore, admit }) {
       claim = claimResult.claim;
     }
 
-    const receipt = checkedReceipt(await admit(envelope));
+    const received = await admit(envelope);
+    if (received?.kind === 'semioverse.github.actor-transport-pending.v1') {
+      if (!durableClaims || claim === null || received.state !== 'PENDING_RECEIVER_READBACK' ||
+          received.eventKey !== envelope.eventKey ||
+          typeof received.sourceCloudEventId !== 'string' ||
+          !/^ni:\/\/\/sha-256;[A-Za-z0-9_-]{43}$/u.test(received.sourceCloudEventId) ||
+          receiptKey !== 'activitypub:github-delta:' + received.sourceCloudEventId ||
+          typeof received.activityId !== 'string' || !received.activityId ||
+          typeof received.senderActor !== 'string' || !received.senderActor ||
+          typeof received.recipientActor !== 'string' || !received.recipientActor)
+        throw new TypeError('signed Actor delivery is not a qualified pending readback');
+      // Deliberately do NOT clear the durable claim or publish a receipt.
+      // The source event remains pending until a separately evidenced
+      // receiver-local admission resolves the existing claim.
+      return pendingOutcome(claim, received);
+    }
+    if (admit.requiresDurableClaim === true)
+      throw new TypeError('Actor transport cannot manufacture a Semioverse receipt');
+    const receipt = checkedReceipt(received);
     try {
-      receiptStore.put(envelope.eventKey, receipt);
+      receiptStore.put(receiptKey, receipt);
     } catch (error) {
-      const racedReceipt = receiptStore.get(envelope.eventKey);
+      const racedReceipt = receiptStore.get(receiptKey);
       if (!racedReceipt) throw error;
     }
-    const stored = receiptStore.get(envelope.eventKey);
+    const stored = receiptStore.get(receiptKey);
     if (!stored) throw new Error('Semioverse receipt was not durable after admission');
 
     if (claim !== null) {
-      receiptStore.clearClaim(envelope.eventKey, claim.claimId);
+      receiptStore.clearClaim(receiptKey, claim.claimId);
     }
     return receiptOutcome(stored);
   })();
 
-  inflight.set(envelope.eventKey, admission);
+  inflight.set(receiptKey, admission);
   try {
     const outcome = await admission;
     return exposedResult('RECEIVED', envelope, outcome);
   } finally {
-    if (inflight.get(envelope.eventKey) === admission) inflight.delete(envelope.eventKey);
+    if (inflight.get(receiptKey) === admission) inflight.delete(receiptKey);
   }
 }

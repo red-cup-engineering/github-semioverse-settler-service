@@ -1,0 +1,51 @@
+name: "Operational receiving — prove delivered effect"
+description: "Accept or refuse an existing change against a real operating recipient."
+title: "[Receiving] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reuse the original work and its source owner. Use this form only for a distinct
+        independent receiving obligation, not a second copy of a source implementation issue.
+        Distinguish source, tested, integrated, installed and recipient-accepted states.
+        Intake carries this issue as a sourced report. A receiving enterprise adopts any
+        obligation; closing an issue does not accept delivered work.
+        Do not include secrets or private customer data.
+  - type: input
+    id: original
+    attributes:
+      label: Original work and exact source
+      description: Link original issue/PR and immutable source or artifact revision.
+    validations:
+      required: true
+  - type: input
+    id: recipient
+    attributes:
+      label: Independent receiver
+      description: Name the authorized operating office, actor or external customer who can accept the outcome.
+    validations:
+      required: true
+  - type: textarea
+    id: receipt
+    attributes:
+      label: Observed evidence and incomplete stages
+      description: Separate passed, failed, not executed and unknown. Give provider job IDs, revisions, test outputs, runtime and receiver observations where present.
+    validations:
+      required: true
+  - type: textarea
+    id: next
+    attributes:
+      label: Next bounded effect, authority and stop condition
+      description: Identify the smallest admissible actual change, its rights, resource budget, dependency and falsifiable completion criterion.
+    validations:
+      required: true
+  - type: input
+    id: territory
+    attributes:
+      label: Receiving territory and service enterprise
+      description: Name the ANT or colony, Sovereign Service Enterprise, and native receiving actor if known. The host verifies routing and authority.
+  - type: textarea
+    id: continuity
+    attributes:
+      label: Semioverse Work and message continuity
+      description: Link existing native Work or message identities, the message being answered, and any receiving receipt. Leave unknown identities absent.
