@@ -18,6 +18,8 @@ for (let i = 0; i < args.length; i++) {
 }
 if (explicitOwners.length && explicitRepositories.length) throw new TypeError('--owner and --repository select different coverage scopes; use only one');
 const PAGE_SIZE = 30;
+// Search has an independent quota and supports 100 items per request.
+const SEARCH_PAGE_SIZE = 100;
 function api(path) {
   for (let attempt = 1; ; attempt++) {
     try {
@@ -52,10 +54,10 @@ function search(query, observationAttempt = 1) {
   const result = [];
   const seen = new Set();
   let expected;
-  for (let page = 1; page <= Math.ceil(1000 / PAGE_SIZE); page++) {
+  for (let page = 1; page <= Math.ceil(1000 / SEARCH_PAGE_SIZE); page++) {
     let batch;
     try {
-      batch = api(`search/issues?q=${encodeURIComponent(query)}&sort=created&order=asc&per_page=${PAGE_SIZE}&page=${page}`);
+      batch = api(`search/issues?q=${encodeURIComponent(query)}&sort=created&order=asc&per_page=${SEARCH_PAGE_SIZE}&page=${page}`);
     } catch (error) {
       // Search has a separate, much smaller quota than repository APIs. Continue
       // from the discovered repositories, without retries or a partial marker.
@@ -80,7 +82,7 @@ function search(query, observationAttempt = 1) {
       seen.add(item.id); result.push(item);
     }
     if (result.length === expected) return result;
-    if (batch.items.length < PAGE_SIZE) throw new Error(`Premature end of GitHub search: ${query}`);
+    if (batch.items.length < SEARCH_PAGE_SIZE) throw new Error(`Premature end of GitHub search: ${query}`);
   }
   throw new Error(`Search bound reached; coverage is incomplete: ${query}`);
 }
