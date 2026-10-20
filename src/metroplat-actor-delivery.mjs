@@ -113,5 +113,11 @@ export function createMetroplatActorSubmission({
   // calling the effect port. A successful transport may never be put into
   // the Semioverse admission receipt store.
   Object.defineProperty(admit, "requiresDurableClaim", { value: true });
+  // Reject deterministic representation/audience defects before claiming a
+  // durable in-flight effect. The delivered activity is independently formed
+  // under the real send instant; preflight itself cannot issue a message.
+  Object.defineProperty(admit, "preflight", {
+    value: envelope => projectGitHubDeltaActivity(envelope, identity, now()).sourceEvent.id,
+  });
   return admit;
 }
