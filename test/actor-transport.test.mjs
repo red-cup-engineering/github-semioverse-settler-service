@@ -90,12 +90,38 @@ test("one ActivityPub delivery leaves durable pending receiver readback, not a c
   assert.equal(delivered.options.keyPath, actor.keyPath);
   assert.equal(delivered.options.recipient, actor.recipient);
   assert.equal(stored.get(first.envelope.eventKey), null, "transport alone cannot become Semioverse admission");
-  assert.equal(stored.getClaim(first.envelope.eventKey).claimId, first.claim.claimId);
+  assert.equal(stored.getClaim(first.claim.eventKey).claimId, first.claim.claimId);
+  assert.equal(first.claim.eventKey, admit.receiptKey(first.envelope));
+  assert.match(first.claim.eventKey, /^activitypub:github-delta:ni:\/\/\/sha-256;/u);
   const again = await settleGitHubEvent({event:{...sourceEvent(),delivery_id:"delivery-two"},
     receiptStore:new FileReceiptStore(stored.path),admit});
   assert.equal(again.state, "PENDING_RECEIVER_READBACK");
   assert.equal(again.claim.claimId,first.claim.claimId);
   assert.equal(sends, 1, "retry cannot re-send an uncertain effect before native readback");
+});
+
+test("different triggering GitHub Actor testimony on one material revision requires a new source-NI delivery, not replay of the old claim", async t => {
+  const root = mkdtempSync(join(tmpdir(), "github-actor-source-provenance-"));
+  t.after(() => rmSync(root, {recursive:true,force:true}));
+  const store = new FileReceiptStore(join(root,"receipts.json"));
+  let deliveries=0;
+  const admit = createMetroplatActorSubmission({...actor,now:()=>instant,
+    deliver:async activity=>{deliveries++;return deliveryReceipt(activity);},
+  });
+  const first = await settleGitHubEvent({event:sourceEvent(),receiptStore:store,admit});
+  const changed = sourceEvent();
+  changed.sender = { id: 45, login: "other-triggering-actor" };
+  const second = await settleGitHubEvent({event:changed,receiptStore:store,admit});
+  assert.equal(first.envelope.eventKey,second.envelope.eventKey,
+    "the historic material-only key cannot distinguish triggering actors");
+  assert.notEqual(first.transport.sourceCloudEventId,second.transport.sourceCloudEventId);
+  assert.notEqual(first.claim.eventKey,second.claim.eventKey,
+    "native Actor transport must bind the complete original source claim");
+  assert.equal(second.state,"PENDING_RECEIVER_READBACK");
+  assert.equal(deliveries,2);
+  const duplicate = await settleGitHubEvent({event:{...changed,delivery_id:"retry"},receiptStore:new FileReceiptStore(store.path),admit});
+  assert.equal(duplicate.claim.eventKey,second.claim.eventKey);
+  assert.equal(deliveries,2,"a transport retry has no new GitHub fact");
 });
 
 test("without a durable in-flight claim no signed work may be sent", async () => {
