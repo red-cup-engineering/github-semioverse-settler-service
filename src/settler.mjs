@@ -319,6 +319,7 @@ export async function settleGitHubEnvelope({ envelope, receiptStore, admit }) {
           received.eventKey !== envelope.eventKey ||
           typeof received.sourceCloudEventId !== 'string' ||
           !/^ni:\/\/\/sha-256;[A-Za-z0-9_-]{43}$/u.test(received.sourceCloudEventId) ||
+          receiptKey !== 'activitypub:github-delta:' + received.sourceCloudEventId ||
           typeof received.activityId !== 'string' || !received.activityId ||
           typeof received.senderActor !== 'string' || !received.senderActor ||
           typeof received.recipientActor !== 'string' || !received.recipientActor)
