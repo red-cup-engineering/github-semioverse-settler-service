@@ -314,3 +314,88 @@ a new live owner's lock. Recovery requires exclusive owner quiescence and receip
 reconciliation before removing the inspected abandoned lock. No recovery actuator
 is supplied here. This is local-process exclusion, not distributed fencing or
 power-loss durability; all cooperating writers must use the same protocol.
+
+
+## Signed Actor-to-Actor GitHub delta transport (candidate, not installed)
+
+GitHub observations previously crossed the host boundary only as a direct
+`application/cloudevents+json` POST to MetroPlat's `/arrivals` URI. That is a
+valid CloudEvents JSON representation but **not** an addressed or signed
+ActivityPub Actor delivery. The alternative `activitypub` transport now consumes
+the original `normalizeGitHubEvent` / `githubDeltaCloudEvent` observations,
+projects the event using the original ActivityPub provider's
+`senActivityObjectBytes` and `projectSenActivity` codecs, and calls its signed
+`deliverFromEnvironment` publisher. It does not duplicate JSON-LD, SEN CBOR,
+CloudEvents-over-A2A, recipient signatures, key stores or transport retries.
+
+The ActivityPub `Create` is from an **already commissioned bridge Actor**,
+not the GitHub repository, GitHub author or triggering GitHub user. Its
+`application/sen+cbor` Document bears a GitHub-delta typed content object;
+that object contains the unchanged original CloudEvent with its stable RFC 6920
+NI identity, repository identity, retained GitHub author and triggering actor,
+revision, action and material. An ordinary signed receiver inbox can retain
+that as a native ActivityPub/CloudEvents arrival, without granting it Work or
+office authority.
+
+### Selection by actual available capabilities
+
+The original `settle-github-event` and `reconcile-github` commands share one
+`selectGitHubSemioverseTransport` selector:
+
+- `GITHUB_SEMIOVERSE_TRANSPORT=cloudevents-http` (default): require
+  `METROPLAT_ARRIVAL_URL` ending exactly in `/arrivals`, optionally
+  `METROPLAT_AUTHORIZATION`. This original route only calls something received
+  when it gets the native `metroplat.arrival.receipt` with source identity and
+  packet digest. It does **not** attest independent Work acceptance.
+- `GITHUB_SEMIOVERSE_TRANSPORT=activitypub`: require
+  `ACTIVITYPUB_ORIGIN`, `ACTIVITYPUB_IDENTIFIER`,
+  `ACTIVITYPUB_KEYS_PATH`, `ACTIVITYPUB_AGENT_CARD`,
+  `ACTIVITYPUB_RECIPIENT` and `ACTIVITYPUB_RECIPIENT_INBOX`.
+  The preexisting key file must belong to an explicitly commissioned Actor
+  **already served under that origin**; this service does not mint one. The
+  recipient must be an exact HTTPS `/actors/<identifier>` URI and its
+  canonical `/inbox`; the source Agent Card must be on the signed Actor's
+  origin. The issuer Actor must be authorized at the receiving node if any
+  downstream operation is to run.
+- Any other transport spelling, absent signer, off-origin Agent Card,
+  wrong inbox or private/unknown GitHub audience refuses. The Actor path never
+  silently retries as an unsigned HTTP POST after a denial or uncertain effect.
+
+### Distinguish transport custody from native work
+
+The upstream ActivityPub `deliverActivity` result with
+`ActivityPubDeliveryReceipt.delivered=true` establishes only its **transport
+submission**, not receiver Work admission. The source-owned
+`FileReceiptStore.claim` is acquired before sending; the Actor transport
+returns `PENDING_RECEIVER_READBACK` and retains the claim instead of inserting
+a fake `receiptId`. The initial result exposes the source event NI, sender and
+recipient Actor URIs and Activity ID; a subsequent run sees the same held claim
+and does not resubmit the uncertain act. The original `/arrivals` adapter
+continues to receive and store its original native receipt, without changing
+its behavior.
+
+The next source-owned receiving step is to return a signed,
+request-correlated **native arrival receipt** from the instance Actor (or read
+the exact retained arrival through an explicitly authorized read port), then
+settle this *existing* in-flight claim only after verifying its source event
+identity, audience, signer and receiver's durable status. Do not take an
+ActivityPub HTTP success, queue status, or a bridged CloudEvent as proof of
+semantic admission, Work taking, settlement, customer satisfaction, or a
+downstream resource effect. There is no production Actor provisioning,
+receiver receipt adapter, deployment, CI execution or independent external
+consumer receipt claimed by this source candidate.
+
+For now the source boundary exercises an actual producer-side
+`Create` projection, the upstream signed delivery port and a durable
+pending/readback distinction. The existing FeltOS
+`createActivityPubNodeArrivalHandler` already admits signed SEN activities
+into its native arrival store; it does not yet return the specialized
+authenticated business readback this bridge needs.
+
+**Native receiving:** run `npm run verify` and both transport fixture suites
+against the exact frozen upstream ActivityPub package. Then independently
+receive a signed activity from the commissioned bridge Actor into the
+installed MetroPlat instance, read the native source identity, demonstrate
+idempotent recovery and the separated receiver-owned acceptance decision, and
+only then consider changing a live host's selection. Signed delivery is not
+automatically authority to originate Work.
