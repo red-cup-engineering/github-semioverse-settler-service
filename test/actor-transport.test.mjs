@@ -124,6 +124,27 @@ test("different triggering GitHub Actor testimony on one material revision requi
   assert.equal(deliveries,2,"a transport retry has no new GitHub fact");
 });
 
+test("a transported activity cannot claim a different source event than the one whose exact NI was held", async t => {
+  const root = mkdtempSync(join(tmpdir(), "github-actor-foreign-ni-"));
+  t.after(() => rmSync(root, {recursive:true,force:true}));
+  const store = new FileReceiptStore(join(root,"receipts.json"));
+  const ni = "ni:///sha-256;" + "A".repeat(43);
+  const foreign = "ni:///sha-256;" + "B".repeat(43);
+  const admit = async envelope => ({
+    kind:GITHUB_ACTOR_PENDING_KIND,state:"PENDING_RECEIVER_READBACK",
+    eventKey:envelope.eventKey,sourceCloudEventId:foreign,
+    activityId:"https://bridge.example/activities/forged",
+    senderActor:sender,recipientActor:actor.recipient,
+  });
+  admit.requiresDurableClaim=true;
+  admit.receiptKey=()=> "activitypub:github-delta:" + ni;
+  await assert.rejects(settleGitHubEvent({event:sourceEvent(),receiptStore:store,admit}),
+    /qualified pending readback/u);
+  assert.equal(store.get("activitypub:github-delta:" + ni),null);
+  assert.ok(store.getClaim("activitypub:github-delta:" + ni),
+    "uncertain transmission remains a claim but is never marked received");
+});
+
 test("without a durable in-flight claim no signed work may be sent", async () => {
   let sent=false;
   const admit = createMetroplatActorSubmission({...actor,
