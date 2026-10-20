@@ -217,7 +217,8 @@ function clearSettledClaim(receiptStore, eventKey) {
 }
 
 const receiptOutcome = (receipt) => Object.freeze({ kind: 'RECEIPT', receipt });
-const pendingOutcome = (claim) => Object.freeze({ kind: 'PENDING', claim });
+const pendingOutcome = (claim, transport) => Object.freeze({ kind: 'PENDING', claim,
+  ...(transport === undefined ? {} : { transport }) });
 
 function exposedResult(state, envelope, outcome) {
   if (outcome.kind === 'PENDING') {
@@ -225,6 +226,7 @@ function exposedResult(state, envelope, outcome) {
       state: 'PENDING_RECEIVER_READBACK',
       envelope,
       claim: outcome.claim,
+      ...(outcome.transport === undefined ? {} : { transport: outcome.transport }),
     });
   }
   return Object.freeze({ state, envelope, receipt: outcome.receipt });
@@ -272,6 +274,11 @@ export async function settleGitHubEnvelope({ envelope, receiptStore, admit }) {
   }
 
   const durableClaims = hasDurableClaimInterface(receiptStore);
+  // A signed ActivityPub delivery is an uncertain effect until the real
+  // receiver's native arrival/Work readback is observed. It cannot run
+  // without a durable pre-effect claim; in-memory coalescing is not enough.
+  if (admit.requiresDurableClaim === true && !durableClaims)
+    throw new TypeError('Actor submission requires a durable receiver-readback claim before delivery');
   const admission = (async () => {
     let claim = null;
     if (durableClaims) {
@@ -290,7 +297,24 @@ export async function settleGitHubEnvelope({ envelope, receiptStore, admit }) {
       claim = claimResult.claim;
     }
 
-    const receipt = checkedReceipt(await admit(envelope));
+    const received = await admit(envelope);
+    if (received?.kind === 'semioverse.github.actor-transport-pending.v1') {
+      if (!durableClaims || claim === null || received.state !== 'PENDING_RECEIVER_READBACK' ||
+          received.eventKey !== envelope.eventKey ||
+          typeof received.sourceCloudEventId !== 'string' ||
+          !/^ni:\/\/\/sha-256;[A-Za-z0-9_-]{43}$/u.test(received.sourceCloudEventId) ||
+          typeof received.activityId !== 'string' || !received.activityId ||
+          typeof received.senderActor !== 'string' || !received.senderActor ||
+          typeof received.recipientActor !== 'string' || !received.recipientActor)
+        throw new TypeError('signed Actor delivery is not a qualified pending readback');
+      // Deliberately do NOT clear the durable claim or publish a receipt.
+      // The source event remains pending until a separately evidenced
+      // receiver-local admission resolves the existing claim.
+      return pendingOutcome(claim, received);
+    }
+    if (admit.requiresDurableClaim === true)
+      throw new TypeError('Actor transport cannot manufacture a Semioverse receipt');
+    const receipt = checkedReceipt(received);
     try {
       receiptStore.put(envelope.eventKey, receipt);
     } catch (error) {
