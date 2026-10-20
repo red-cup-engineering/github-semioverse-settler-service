@@ -279,6 +279,11 @@ export async function settleGitHubEnvelope({ envelope, receiptStore, admit }) {
   // without a durable pre-effect claim; in-memory coalescing is not enough.
   if (admit.requiresDurableClaim === true && !durableClaims)
     throw new TypeError('Actor submission requires a durable receiver-readback claim before delivery');
+  if (typeof admit.preflight === 'function') {
+    const preflight = admit.preflight(envelope);
+    if (preflight && typeof preflight.then === 'function')
+      throw new TypeError('Actor representation preflight must complete before an effect claim');
+  }
   const admission = (async () => {
     let claim = null;
     if (durableClaims) {
