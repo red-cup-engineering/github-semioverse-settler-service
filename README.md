@@ -437,3 +437,29 @@ The repository projects the original Computer Operations0.1.2 issue/PR form
 family, including ANT (Autonomous National Territory), Sovereign Service
 Enterprise, and native Message/Work receiving continuity. These fields retain
 source testimony and return addresses; the native receiver verifies authority.
+
+
+## First-class Git branch and tag observations
+
+Set `GITHUB_SETTLER_INCLUDE_REFS=1` when running the original
+`reconcile-github` executable to add authenticated, fully paginated
+`refs/heads/*` and `refs/tags/*` observations to the existing issue/PR
+delta stream. This is opt-in because repository-wide ref enumeration has
+additional provider cost. The selected GitHub `git/matching-refs` responses
+retain the **complete refname**, stable numeric repository ID, exact SHA-1
+(or SHA-256) *object target* and its type: an annotated tag pointing at a
+tag object is not falsely reported as a commit. The normalizer gives each
+`git_ref` a stable `providerObjectKey` based on repository ID and refname;
+moving the ref changes the material-bound event identity. Existing durable
+settlement/readback and authorization policy are reused, with no new Work
+registry or receipt database.
+
+These are **snapshots of currently observed refs**. Their lack of a GitHub
+change timestamp is preserved; a later missing ref is not automatically
+a deletion receipt. Polling does not decide to merge, close a PR, delete an
+archive tag, rename/transfer a repository, or adopt a standard. Use the
+original Work receiving path with an independently verified account, scope,
+authority, source identity and acceptance conditions before such actions.
+`GITHUB_SETTLER_INCLUDE_REFS` absent or other than `1` leaves ordinary
+issue/PR polling unchanged. Native tests exercise distinct annotated tags,
+head updates, idempotent replay and malformed/duplicate-ref refusals.
