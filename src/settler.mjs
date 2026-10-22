@@ -14,6 +14,7 @@ const objectFor = (event) => {
   if (event.issue) return ['issue', event.issue];
   if (event.workflow_run) return ['workflow_run', event.workflow_run];
   if (event.deployment) return ['deployment', event.deployment];
+  if (event.git_ref) return ['git_ref', event.git_ref];
   if (event.repository) return ['repository', event.repository];
   throw new TypeError('unsupported GitHub event object');
 };
@@ -97,6 +98,7 @@ function machineFields(body = '') {
 }
 
 const revisionFor = (type, object, event) => {
+  if (type === 'git_ref') return object.object?.sha;
   if (type === 'pull_request') return object.head?.sha ?? object.updated_at ?? event.delivery_id;
   if (type === 'workflow_run') return object.head_sha ?? object.updated_at ?? event.delivery_id;
   return object.updated_at ?? object.submitted_at ?? object.created_at ?? object.sha ?? event.delivery_id;
@@ -109,7 +111,22 @@ export function normalizeGitHubEvent(event) {
     throw new TypeError('repository.id and repository.full_name are required');
   }
   const [objectType, object] = objectFor(event);
-  const objectId = object.node_id ?? object.id ?? object.number;
+  // A ref's identity is repository-ID + complete Git refname, not its head SHA
+  // or a provider GraphQL node that may change after deletion/recreation.
+  const objectId = objectType === 'git_ref' ? object.ref : object.node_id ?? object.id ?? object.number;
+  if (objectType === 'git_ref') {
+    const ref = object.ref;
+    if (typeof ref !== 'string' || !/^refs\/(?:heads|tags)\/.+$/u.test(ref) ||
+        ref.split('/').some(part => !part || part === '.' || part === '..' ||
+          part.startsWith('.') || part.endsWith('.lock')) ||
+        ref.endsWith('.') || ref.includes('..') ||
+        ['~', '^', ':', '?', '*', '[', '\\', '@{'].some(bad => ref.includes(bad)) ||
+        /[\u0000-\u0020\u007F]/u.test(ref))
+      throw new TypeError('GitHub Git ref requires a valid heads/ or tags/ refname');
+    if (!['commit', 'tag', 'tree', 'blob'].includes(object.object?.type) ||
+        !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(object.object?.sha ?? ''))
+      throw new TypeError('GitHub Git ref requires an exact typed SHA-1 or SHA-256 target');
+  }
   if (objectId === undefined || objectId === null) throw new TypeError('provider object identity is required');
   const revision = revisionFor(objectType, object, event);
   if (revision === undefined || revision === null) throw new TypeError('provider revision is required');
