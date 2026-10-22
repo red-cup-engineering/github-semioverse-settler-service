@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { normalizeGitHubEvent } from './settler.mjs';
+import { gitHubRefLocator, normalizeGitHubEvent } from './settler.mjs';
 
 const MEDIA = 'data:application/json;base64,';
 const MAX_MATERIAL_BYTES = 256 * 1024;
@@ -114,7 +114,11 @@ export function prepareGitHubWork({ event, opening, binding }) {
   for (const field of ['by', 'hand', 'at', 'id', 'officeService', 'scope', 'sources', 'as']) {
     if (Object.hasOwn(opening, field)) throw new TypeError(`source interpretation cannot supply ${field}`);
   }
-  if (typeof envelope.source.url !== 'string' || !envelope.source.url.startsWith('https://github.com/')) throw new TypeError('original GitHub locator is required');
+  const locator = envelope.source.url;
+  const exactRefLocator = envelope.source.objectType === 'git_ref' &&
+    locator === gitHubRefLocator(envelope.source.repositoryFullName, envelope.source.objectId);
+  if (typeof locator !== 'string' || !(locator.startsWith('https://github.com/') || exactRefLocator))
+    throw new TypeError('original GitHub locator is required');
   const document = gitHubSourceDocument(envelope);
   const input = {
     ...structuredClone(opening),
