@@ -68,6 +68,7 @@ test("opt-in current branch and annotated-tag refs are typed, source-bound and r
     assert.equal(row.source.repositoryId, 561);
     assert.equal(row.source.revision, row.material.object.sha);
     assert.equal(row.material.url.startsWith("https://api.github.com/repos/"), true);
+    assert.equal(row.source.url, row.material.url, "native source must identify this ref, not the repository homepage");
   }
   assert.equal(rows.find(x => x.source.objectId === tag.ref).material.object.type, "tag");
   assert.equal(requested.length, 3);
