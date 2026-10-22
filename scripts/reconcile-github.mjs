@@ -33,6 +33,7 @@ const deltas = await collectGitHubRepositories({
   repositories,
   state: process.env.GITHUB_SETTLER_STATE ?? "open",
   since: process.env.GITHUB_SETTLER_SINCE,
+  includeRefs: process.env.GITHUB_SETTLER_INCLUDE_REFS === "1",
 });
 
 const store = new FileReceiptStore(
