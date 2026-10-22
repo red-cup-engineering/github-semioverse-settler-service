@@ -450,7 +450,16 @@ retain the **complete refname**, stable numeric repository ID, exact SHA-1
 (or SHA-256) *object target* and its type: an annotated tag pointing at a
 tag object is not falsely reported as a commit. The normalizer gives each
 `git_ref` a stable `providerObjectKey` based on repository ID and refname;
-moving the ref changes the material-bound event identity. Existing durable
+moving the ref changes the material-bound event identity. Each branch/tag
+now also projects its own qualified GitHub REST ref locator
+(`https://api.github.com/repos/OWNER/REPO/git/refs/heads/NAME` or `tags/NAME`),
+not the shared repository homepage. That locator is a current provider-read
+address, never proof that an earlier ref target is still present: the exact
+observed refname, target type/SHA, GitHub numeric repository identity and
+material commitment remain in the immutable source document. The original
+native Work source reader permits this ref-specific API locator only when
+it matches the derived provider coordinates; existing browser issue/PR
+locators and public-audience/authority guards are unchanged. Existing durable
 settlement/readback and authorization policy are reused, with no new Work
 registry or receipt database.
 
