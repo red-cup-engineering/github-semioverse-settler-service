@@ -104,6 +104,18 @@ const revisionFor = (type, object, event) => {
   return object.updated_at ?? object.submitted_at ?? object.created_at ?? object.sha ?? event.delivery_id;
 };
 
+/** Exact GitHub REST identity for one *current* branch or tag ref.
+ * This is a source locator, not the historical material receipt or a merge grant. */
+export function gitHubRefLocator(repositoryFullName, ref) {
+  if (typeof repositoryFullName !== 'string' ||
+      !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repositoryFullName))
+    throw new TypeError('GitHub ref locator requires an exact owner/repository name');
+  if (typeof ref !== 'string' || !/^refs\/(?:heads|tags)\/.+$/u.test(ref))
+    throw new TypeError('GitHub ref locator requires a heads/ or tags/ identity');
+  return 'https://api.github.com/repos/' + repositoryFullName + '/git/refs/' +
+    ref.slice('refs/'.length).split('/').map(encodeURIComponent).join('/');
+}
+
 export function normalizeGitHubEvent(event) {
   if (!event || typeof event !== 'object') throw new TypeError('event is required');
   const repo = event.repository;
@@ -163,7 +175,7 @@ export function normalizeGitHubEvent(event) {
       visibility: repo.private === true ? 'private' : repo.private === false ? 'public' : 'unknown',
       occurredAt,
       deliveryId: event.delivery_id ?? null,
-      url: object.html_url ?? repo.html_url ?? null,
+      url: objectType === 'git_ref' ? gitHubRefLocator(repo.full_name, object.ref) : object.html_url ?? repo.html_url ?? null,
       ...(parent ? { parent: Object.freeze({
         objectId: String(parent.node_id ?? parent.id ?? parent.number),
         objectNumber: parent.number ?? null,
