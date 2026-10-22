@@ -19,7 +19,7 @@ async function pages({ getJson, path, perPage = 30, maxPages = 100 }) {
   throw new Error("GitHub pagination bound reached: " + path);
 }
 
-export async function collectGitHubRepositoryDeltas({ getJson, repository, state = "open", since, perPage = 30, maxPages = 100 } = {}) {
+export async function collectGitHubRepositoryDeltas({ getJson, repository, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false } = {}) {
   if (!repository || !Number.isInteger(repository.id) || typeof repository.full_name !== "string") {
     throw new TypeError("repository.id and repository.full_name are required");
   }
@@ -39,14 +39,36 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
       deltas.push(normalizeGitHubEvent({ action: "observed", repository, issue: item }));
     }
   }
+  // These are *observed current references*, not inferred branch-create/
+  // branch-delete events. Retain Git's actual ref target: annotated tags may
+  // point at a tag object rather than a peeled commit. A missing ref in a later
+  // scan cannot independently certify deletion or authorize an effect.
+  if (typeof includeRefs !== "boolean") throw new TypeError("includeRefs must be a boolean");
+  if (includeRefs) {
+    const seen = new Set();
+    for (const family of ["heads", "tags"]) {
+      const refs = await pages({
+        getJson,
+        path: "repos/" + repository.full_name + "/git/matching-refs/" + family,
+        perPage, maxPages,
+      });
+      for (const ref of refs) {
+        if (typeof ref?.ref !== "string" || !ref.ref.startsWith("refs/" + family + "/") ||
+            seen.has(ref.ref))
+          throw new Error("GitHub Git reference identity is missing, outside selected family or repeated");
+        seen.add(ref.ref);
+        deltas.push(normalizeGitHubEvent({ action: "observed", repository, git_ref: ref }));
+      }
+    }
+  }
   return deltas.sort((left, right) => String(left.source.occurredAt ?? "").localeCompare(String(right.source.occurredAt ?? "")) || left.eventKey.localeCompare(right.eventKey));
 }
 
-export async function collectGitHubRepositories({ getJson, repositories, state = "open", since, perPage = 30, maxPages = 100 } = {}) {
+export async function collectGitHubRepositories({ getJson, repositories, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false } = {}) {
   if (!Array.isArray(repositories) || repositories.length === 0) throw new TypeError("repositories are required");
   const result = [];
   for (const repository of repositories) {
-    result.push(...await collectGitHubRepositoryDeltas({ getJson, repository, state, since, perPage, maxPages }));
+    result.push(...await collectGitHubRepositoryDeltas({ getJson, repository, state, since, perPage, maxPages, includeRefs }));
   }
   return result;
 }
