@@ -1,5 +1,13 @@
 import { admitGitHubRefName, normalizeGitHubEvent } from "./settler.mjs";
 
+// Git refs and Git tags are distinct original GitHub namespaces. Both can
+// conceal unreceived agent work; neither grants an archive/retirement receipt.
+const ARCHIVE_SOURCE_PREFIXES = Object.freeze(["refs/tags/archive", "refs/archive"]);
+const withinArchiveSource = (ref, prefix) =>
+  typeof ref === "string" && (ref === prefix || ref.startsWith(prefix + "/"));
+const isArchiveSource = ref =>
+  ARCHIVE_SOURCE_PREFIXES.some(prefix => withinArchiveSource(ref, prefix));
+
 const required = (value, name) => {
   if (typeof value !== "string" || value.trim() === "") throw new TypeError(name + " is required");
   return value.trim();
@@ -25,8 +33,11 @@ async function pages({ getJson, path, perPage = 30, maxPages = 100 }) {
  * The ordinary native Work normalizer still verifies exact provider material.
  */
 export function projectArchiveRefSelectionsFromCensus(refCensus, refNames) {
- if(!refCensus||refCensus.recordKind!=='github.archive-ref-census/v1'
-   ||refCensus.prefix!=='refs/archive'
+ if(!refCensus||typeof refCensus!=='object'||Array.isArray(refCensus)
+   ||Object.keys(refCensus).sort().join(',')!==
+     'count,defaultBranch,defaultHeadSha,effectsPerformed,prefix,recordKind,refs,repositoryFullName,repositoryId,sourceCoverage'
+   ||refCensus.recordKind!=='github.archive-ref-census/v1'
+   ||!ARCHIVE_SOURCE_PREFIXES.includes(refCensus.prefix)
    ||refCensus.sourceCoverage!=='complete-exact-archive-ref-list-at-two-reads'
    ||refCensus.effectsPerformed!==false
    ||!Number.isSafeInteger(refCensus.repositoryId)||refCensus.repositoryId<1
@@ -37,15 +48,18 @@ export function projectArchiveRefSelectionsFromCensus(refCensus, refNames) {
    ||!/^[a-f0-9]{40}$/u.test(refCensus.defaultHeadSha)
    ||!Array.isArray(refCensus.refs)||refCensus.refs.length>512
    ||refCensus.refs.length!==refCensus.count)
-   throw new TypeError('Complete original GHS custom Git archive source census required');
+   throw new TypeError('Complete original GHS archive tag or custom-ref source census required');
  if(!Array.isArray(refNames)||refNames.length<1||refNames.length>8
    ||new Set(refNames).size!==refNames.length)
    throw new TypeError('Explicit one-to-eight distinct original Git ref names required');
  const observations=new Map();
  for(const row of refCensus.refs){
-   if(!row||row.recordKind!=='github.archive-ref-observation/v1'
+   if(!row||typeof row!=='object'||Array.isArray(row)
+     ||Object.keys(row).sort().join(',')!==
+       'automaticRefRetirementAllowed,objectSha,objectType,recordKind,refName,sourceConsumerReceiving'
+     ||row.recordKind!=='github.archive-ref-observation/v1'
      ||typeof row.refName!=='string'
-     ||!(row.refName==='refs/archive'||row.refName.startsWith('refs/archive/'))
+     ||!withinArchiveSource(row.refName, refCensus.prefix)
      ||!['commit','tag','tree','blob'].includes(row.objectType)
      ||typeof row.objectSha!=='string'||!/^[a-f0-9]{40}$/u.test(row.objectSha)
      ||row.sourceConsumerReceiving!=='not-observed'
@@ -72,7 +86,8 @@ export function projectArchiveRefSelectionsFromCensus(refCensus, refNames) {
  * Its upstream identity is the original GHS census's stable repository ID,
  * original repository name, full ref, exact typed Git target. Do not enumerate
  * all other refs in a large archive namespace to read this one input: GitHub
- * has a standard exact-ref resource at /git/ref/archive/... .
+ * has a standard exact-ref resource at /git/ref/tags/archive/... for archive
+ * tags or /git/ref/archive/... for custom refs.
  *
  * The two exact source cuts and repository-ID rechecks are deliberately
  * read-only. They establish a bounded current observation, not an exhaustive
@@ -93,9 +108,8 @@ async function selectedArchiveRefDeltas({getJson,repository,sources}) {
      ||!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(source.objectSha))
      throw new TypeError('Exact original repository ID and typed Git object source required');
    admitGitHubRefName(source.refName);
-   if(!(source.refName==='refs/archive'||source.refName.startsWith('refs/archive/'))
-     ||selected.has(source.refName))
-     throw new TypeError('Unique original refs/archive source identity required');
+   if(!isArchiveSource(source.refName) || selected.has(source.refName))
+     throw new TypeError('Unique original Git archive source identity required');
    selected.add(source.refName);
  }
  const path='repos/'+repository.full_name;
@@ -214,7 +228,7 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
   if (includeRefs) {
     // Unlike GitHub issues, native git/matching-refs ignores ordinary
     // per_page/page. Keep whole-namespace observation separate from exact
-    // refs/archive source selection and its quoted object-ID contract.
+    // selected archive tag/custom-ref source and its quoted object-ID contract.
     for (const family of ["heads", "tags"])
       deltas.push(...await completeGitRefFamily({getJson,repository,family}));
   }
@@ -257,8 +271,8 @@ export async function collectGitHubRepositories({ getJson, repositories, state =
       ||!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(source.objectSha))
       throw new TypeError('Selected archive source must declare its typed original Git object');
     admitGitHubRefName(source.refName);
-    if(!(source.refName==='refs/archive'||source.refName.startsWith('refs/archive/')))
-      throw new TypeError('Selected source belongs to the custom Git archive namespace');
+    if(!isArchiveSource(source.refName))
+      throw new TypeError('Selected source belongs to neither the original archive tag nor custom Git archive namespace');
     seen.add(name+'@'+source.refName);
     byRepository.set(name,[...(byRepository.get(name)??[]),source]);
   }
