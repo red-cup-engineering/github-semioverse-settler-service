@@ -105,13 +105,14 @@ const revisionFor = (type, object, event) => {
 };
 
 /** Exact GitHub REST identity for one *current* branch or tag ref.
+ * Custom refs/archive/* is preserved native Git source, not a tag or a Work receipt.
  * This is a source locator, not the historical material receipt or a merge grant. */
 export function gitHubRefLocator(repositoryFullName, ref) {
   if (typeof repositoryFullName !== 'string' ||
       !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repositoryFullName))
     throw new TypeError('GitHub ref locator requires an exact owner/repository name');
-  if (typeof ref !== 'string' || !/^refs\/(?:heads|tags)\/.+$/u.test(ref))
-    throw new TypeError('GitHub ref locator requires a heads/ or tags/ identity');
+  if (typeof ref !== 'string' || !/^refs\/(?:heads|tags|archive)\/.+$/u.test(ref))
+    throw new TypeError('GitHub ref locator requires a heads/, tags/ or archive/ identity');
   return 'https://api.github.com/repos/' + repositoryFullName + '/git/refs/' +
     ref.slice('refs/'.length).split('/').map(encodeURIComponent).join('/');
 }
@@ -128,13 +129,13 @@ export function normalizeGitHubEvent(event) {
   const objectId = objectType === 'git_ref' ? object.ref : object.node_id ?? object.id ?? object.number;
   if (objectType === 'git_ref') {
     const ref = object.ref;
-    if (typeof ref !== 'string' || !/^refs\/(?:heads|tags)\/.+$/u.test(ref) ||
+    if (typeof ref !== 'string' || !/^refs\/(?:heads|tags|archive)\/.+$/u.test(ref) ||
         ref.split('/').some(part => !part || part === '.' || part === '..' ||
           part.startsWith('.') || part.endsWith('.lock')) ||
         ref.endsWith('.') || ref.includes('..') ||
         ['~', '^', ':', '?', '*', '[', '\\', '@{'].some(bad => ref.includes(bad)) ||
         /[\u0000-\u0020\u007F]/u.test(ref))
-      throw new TypeError('GitHub Git ref requires a valid heads/ or tags/ refname');
+      throw new TypeError('GitHub Git ref requires a valid heads/, tags/ or archive/ refname');
     if (!['commit', 'tag', 'tree', 'blob'].includes(object.object?.type) ||
         !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(object.object?.sha ?? ''))
       throw new TypeError('GitHub Git ref requires an exact typed SHA-1 or SHA-256 target');
