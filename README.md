@@ -463,6 +463,46 @@ locators and public-audience/authority guards are unchanged. Existing durable
 settlement/readback and authorization policy are reused, with no new Work
 registry or receipt database.
 
+### Receive one original custom Git archive source, not an ambient backlog
+
+A separate **native Git custom-ref namespace** `refs/archive/*` holds
+historical agent work. It is not `refs/tags/archive/*` and does not confer an
+archive receipt. GitHub's `git/matching-refs/archive` endpoint was observed
+returning the **same 504 references for both `page=1` and `page=2`**;
+the ordinary paginated head/tag loop is **incorrect** for this endpoint.
+The original `github-poll` adapter therefore performs two whole-response
+reads at the same exact GitHub API address, validates complete source
+identity with a 512-ref bound, and emits **only explicitly selected** ref
+events into the *existing* `normalizeGitHubEvent` and durable native
+Work receiver. There is no new archive queue, receipt store or data source.
+
+The original `reconcile-github` executable accepts one typed environment
+value to specify at most eight selections under repositories already
+admitted by the authenticated original owner inventory:
+
+```sh
+GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS='[{"repository":"red-cup-engineering/git-services-section","refName":"refs/archive/2026-10-09/codex/github-closed-work-observation"}]' \
+  node scripts/reconcile-github.mjs
+```
+
+Absent this variable, ordinary issue/PR scanning and optional
+`GITHUB_SETTLER_INCLUDE_REFS=1` head/tag polling remain unchanged.
+The native `github:repo:<ID>:git_ref:<FULL_GIT_REF>` identity,
+original SHA/object type, material digest and
+`https://api.github.com/repos/OWNER/REPO/git/refs/archive/...` locator
+flow into the existing native Work source document; a replay of unchanged
+source uses the original receipt. A relocated or retargeted Git object is a
+new *observation*, not permission to integrate or retire history.
+
+The separate
+[GitHub Engineering estate source reader](https://github.com/red-cup-engineering/github-engineering-services-section/pull/113)
+owns exact historical source-tree differences and the source/issue/consumer
+receiving gesture. The [original Coesite receiving method](https://github.com/coesite-operations/operations-services-section/blob/main/lib/agency/skills/receive-repository-integration/SKILL.md)
+owns independent acceptance. This settler carries a truthful selected provider
+signal into native Work; it does not infer that all 504 old refs require
+504 new Work assignments, receive them automatically, delete custom refs or
+mint authority from a name.
+
 These are **snapshots of currently observed refs**. Their lack of a GitHub
 change timestamp is preserved; a later missing ref is not automatically
 a deletion receipt. Polling does not decide to merge, close a PR, delete an
