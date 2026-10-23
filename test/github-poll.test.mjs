@@ -217,7 +217,7 @@ test("selected archive producer refuses stale provider IDs, retargeting, or fabr
   {...source,refName:"refs/archive/../malformed"},
  ]),/refname/u);
  await assert.rejects(attempt({repo:stable,ref:()=>good},[source,source]),
-  /Unique original refs\/archive source identity/u);
+  /Unique original Git archive source identity/u);
 });
 
 test("exact numeric repository identity and pinned object are required before any cross-owner read",async()=>{
@@ -245,7 +245,7 @@ test("exact numeric repository identity and pinned object are required before an
  const wrong=[
   [{...selected,repositoryId:562}],
   [{...selected,repositoryFullName:"alien/owner"}],
-  [{...selected,refName:"refs/tags/archive/incorrect-family"}],
+  [{...selected,refName:"refs/tags/not-an-archive"}],
   [{...selected,objectSha:"b".repeat(39)}],
   [selected,selected],
   [{...selected,received:true}],
@@ -474,4 +474,80 @@ test("source-only producer refuses empty selection, mixed polls, foreign reposit
   },
  }),/changed from its admitted source object/u);
  assert.equal(requested,2,"stale original SHA refuses at first exact provider read");
+});
+
+
+test("original GHS archive TAG census feeds selected source to the existing native Work receiver",async()=>{
+ // This is the output shape of the original GitHub Engineering
+ // observeArchiveRefCensus, not the separate custom refs/archive namespace.
+ const repository={id:1284325652,full_name:"561-group/bare-cedar-fog",default_branch:"main"};
+ const tagRef="refs/tags/archive/codex-unprocessed-code";
+ const annotatedRef="refs/tags/archive/codex-unprocessed-annotated";
+ const sha="a".repeat(40), annotatedObject="b".repeat(40), currentHead="c".repeat(40);
+ const observation=(refName,objectType,objectSha)=>({
+  recordKind:"github.archive-ref-observation/v1",
+  refName,objectSha,objectType,
+  sourceConsumerReceiving:"not-observed",automaticRefRetirementAllowed:false,
+ });
+ const tag=observation(tagRef,"commit",sha);
+ const annotated=observation(annotatedRef,"tag",annotatedObject);
+ const census={
+  recordKind:"github.archive-ref-census/v1",
+  repositoryId:repository.id,repositoryFullName:repository.full_name,
+  defaultBranch:"main",defaultHeadSha:currentHead,
+  sourceCoverage:"complete-exact-archive-ref-list-at-two-reads",
+  prefix:"refs/tags/archive",count:2,
+  refs:[tag,annotated],effectsPerformed:false,
+ };
+ const selections=projectArchiveRefSelectionsFromCensus(census,[tagRef,annotatedRef]);
+ assert.deepEqual(selections.map(s=>[s.refName,s.objectType,s.objectSha]),[
+  [tagRef,"commit",sha],[annotatedRef,"tag",annotatedObject],
+ ]);
+ assert.equal(Object.isFrozen(selections),true);
+ const root="repos/561-group/bare-cedar-fog";
+ const calls=[];
+ const getJson=async path=>{
+  calls.push(path);
+  if(path===root)return {id:repository.id,full_name:repository.full_name,
+   default_branch:"main",private:true};
+  if(path===root+"/git/ref/tags/archive/codex-unprocessed-code")
+   return {ref:tagRef,object:{type:"commit",sha}};
+  if(path===root+"/git/ref/tags/archive/codex-unprocessed-annotated")
+   return {ref:annotatedRef,object:{type:"tag",sha:annotatedObject}};
+  throw new Error("source-only must not scan unrelated repositories, issues or Git families: "+path);
+ };
+ const deltas=await collectGitHubRepositories({
+  getJson,repositories:[repository,{id:2,full_name:"561-group/elsewhere"}],
+  archiveRefSelections:selections,sourceOnly:true,
+ });
+ assert.equal(deltas.length,2);
+ assert.equal(calls.length,6,"two repo identity reads and twice two exact-ref reads");
+ assert.equal(calls.filter(p=>p.includes("/git/ref/tags/archive/")).length,4);
+ assert.equal(calls.some(p=>p.includes("matching-refs")||p.includes("/issues?")||p.includes("elsewhere")),false);
+ const byRef=new Map(deltas.map(delta=>[delta.source.objectId,delta]));
+ assert.equal(byRef.get(tagRef).source.revision,sha);
+ assert.equal(byRef.get(annotatedRef).source.revision,annotatedObject,
+  "the Git tag-object OID must never be substituted with a peeled commit");
+ assert.notEqual(byRef.get(tagRef).providerObjectKey,byRef.get(annotatedRef).providerObjectKey);
+ const store=new MemoryReceiptStore();
+ let admitted=0;
+ const admit=async()=>({receiptId:String(++admitted)});
+ for(const delta of deltas){
+  assert.equal((await settleGitHubEnvelope({envelope:delta,receiptStore:store,admit})).state,"RECEIVED");
+  assert.equal((await settleGitHubEnvelope({envelope:delta,receiptStore:store,admit})).state,"DUPLICATE_RECEIVED");
+ }
+ assert.equal(admitted,2);
+
+ // The original upstream Draft 2020-12 record is closed. Neither a different
+ // Git namespace nor an invented acceptance or retirement field is admissible.
+ for(const corrupt of [
+  {...census,prefix:"refs/archive"},
+  {...census,prefix:"refs/tags/archived"},
+  {...census,received:true},
+  {...census,refs:[{...tag,received:true},annotated]},
+  {...census,refs:[tag,{...annotated,sourceConsumerReceiving:"received"}]},
+  {...census,refs:[tag,{...annotated,automaticRefRetirementAllowed:true}]},
+  {...census,refs:[tag,{...annotated,refName:"refs/tags/archive-other/foreign"}]},
+ ])assert.throws(()=>projectArchiveRefSelectionsFromCensus(corrupt,[tagRef]),TypeError);
+ assert.throws(()=>projectArchiveRefSelectionsFromCensus(census,["refs/archive/unrelated"]),TypeError);
 });
