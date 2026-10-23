@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectGitHubRepositoryDeltas } from "../src/github-poll.mjs";
+import { collectGitHubRepositoryDeltas, collectGitHubRepositories } from "../src/github-poll.mjs";
 import { MemoryReceiptStore, normalizeGitHubEvent, settleGitHubEnvelope } from "../src/settler.mjs";
 
 test("poller paginates and preserves exact PR head revision", async () => {
@@ -108,4 +108,117 @@ test("ordinary issue polling does not expand into expensive ref enumeration", as
   assert.deepEqual(await collectGitHubRepositoryDeltas({
     getJson, repository:{id:561,full_name:"red-cup-engineering/x"}
   }),[]);
+});
+
+test("one selected custom refs/archive source uses complete two-read Git ref observations, never pagination",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x"};
+ const sha="a".repeat(40);
+ const rows=Array.from({length:504},(_,i)=>({
+  ref:"refs/archive/2026-10-08/stash-"+i,
+  object:{type:"commit",sha},
+ }));
+ const selected=rows[218].ref;
+ const wantedPath="repos/red-cup-engineering/x/git/matching-refs/archive";
+ const seen=[];
+ const getJson=async path=>{
+  seen.push(path);
+  if(path.startsWith("repos/red-cup-engineering/x/issues?"))return [];
+  if(path===wantedPath)return rows;
+  throw new Error("unexpected or paginated ref read "+path);
+ };
+ const result=await collectGitHubRepositoryDeltas({
+  getJson,repository:repo,archiveRefNames:[selected],
+ });
+ assert.equal(result.length,1,"504 source refs yield only the one explicitly selected Work candidate");
+ assert.equal(result[0].source.objectType,"git_ref");
+ assert.equal(result[0].source.objectId,selected);
+ assert.equal(result[0].source.revision,sha);
+ assert.equal(result[0].source.actor,null);
+ assert.equal(result[0].source.url,
+  "https://api.github.com/repos/red-cup-engineering/x/git/refs/"
+   +selected.slice("refs/".length));
+ assert.equal(seen.filter(path=>path===wantedPath).length,2);
+ assert.equal(seen.some(path=>path.includes("matching-refs/archive?")),false,
+  "the provider ignores conventional pagination and must never be polled as a page stream");
+ const store=new MemoryReceiptStore();
+ const admit=async()=>({receiptId:"qualified-test-only"});
+ assert.equal((await settleGitHubEnvelope({
+  envelope:result[0],receiptStore:store,admit,
+ })).state,"RECEIVED");
+ assert.equal((await settleGitHubEnvelope({
+  envelope:result[0],receiptStore:store,admit,
+ })).state,"DUPLICATE_RECEIVED");
+});
+
+test("a source cut changes or a claimed archive ref is absent: refuse rather than invent receiving",async()=>{
+ const repository={id:561,full_name:"red-cup-engineering/x"};
+ const archive={ref:"refs/archive/original-code",object:{type:"commit",sha:"a".repeat(40)}};
+ const source="repos/red-cup-engineering/x/git/matching-refs/archive";
+ const fixture=cut=>{
+  let observations=0;
+  return async path=>{
+   if(path.includes("/issues?"))return [];
+   if(path===source)return cut(observations++);
+   throw new Error("unexpected provider read "+path);
+  };
+ };
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:fixture(n=>n===0?[archive]:[{...archive,object:{...archive.object,sha:"b".repeat(40)}}]),
+  repository,archiveRefNames:[archive.ref],
+ }),/changed during complete observation/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:fixture(()=>[archive]),repository,archiveRefNames:["refs/archive/not-observed"],
+ }),/absent from complete source population/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:fixture(()=>[archive,archive]),repository,archiveRefNames:[archive.ref],
+ }),/Repeated original archive reference identity/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:fixture(()=>[{ref:"refs/archive/../invalid",object:{type:"commit",sha:"a".repeat(40)}}]),
+  repository,archiveRefNames:["refs/archive/original-code"],
+ }),/refname/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:fixture(()=>Array.from({length:513},(_,i)=>({
+   ref:"refs/archive/held-"+i,object:{type:"commit",sha:"a".repeat(40)},
+  }))),
+  repository,archiveRefNames:[archive.ref],
+ }),/over bound/u);
+});
+
+test("custom archive source selection is exact-repository-scoped, independently typed and off by default",async()=>{
+ const available={id:561,full_name:"red-cup-engineering/x"};
+ const other={id:562,full_name:"red-cup-engineering/y"};
+ const archive={ref:"refs/archive/historical",object:{type:"commit",sha:"a".repeat(40)}};
+ const reads=[];
+ const getJson=async path=>{
+  reads.push(path);
+  if(path.includes("/issues?"))return [];
+  if(path==="repos/red-cup-engineering/x/git/matching-refs/archive")return [archive];
+  throw new Error("unexpected provider scope "+path);
+ };
+ const selected=await collectGitHubRepositories({
+  getJson,repositories:[available,other],
+  archiveRefSelections:[{repository:available.full_name,refName:archive.ref}],
+ });
+ assert.equal(selected.length,1);
+ assert.equal(selected[0].source.repositoryId,561);
+ assert.equal(reads.filter(path=>path.includes("matching-refs/archive")).length,2);
+ assert.equal(reads.some(path=>path.includes("/y/git/matching-refs")),false);
+ const unsupported=[
+  [{repository:other.full_name,refName:"refs/tags/archive/wrong-family"}],
+  [{repository:"elsewhere/guess",refName:archive.ref}],
+  [{repository:available.full_name,refName:archive.ref},
+   {repository:available.full_name,refName:archive.ref}],
+  [{repository:available.full_name,refName:archive.ref,received:true}],
+ ];
+ for(const selection of unsupported){
+  await assert.rejects(collectGitHubRepositories({
+   getJson,repositories:[available,other],archiveRefSelections:selection,
+  }),/Exact previously enumerated Git repository\/ref source selection required/u);
+ }
+ const legacyRef=normalizeGitHubEvent({repository:available,git_ref:archive});
+ assert.equal(legacyRef.source.objectId,archive.ref);
+ assert.notEqual(legacyRef.source.objectId,"refs/tags/archive/historical");
+ assert.throws(()=>normalizeGitHubEvent({repository:available,git_ref:{
+  ...archive,ref:"refs/archived-alias/false-receipt",
+ }}),/refname/u);
 });
