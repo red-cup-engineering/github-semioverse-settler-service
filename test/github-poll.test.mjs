@@ -53,8 +53,8 @@ test("opt-in current branch and annotated-tag refs are typed, source-bound and r
   const getJson = async path => {
     requested.push(path);
     if (path.startsWith("repos/red-cup-engineering/x/issues?")) return [];
-    if (path.startsWith("repos/red-cup-engineering/x/git/matching-refs/heads?")) return [branch];
-    if (path.startsWith("repos/red-cup-engineering/x/git/matching-refs/tags?")) return [tag];
+    if (path === "repos/red-cup-engineering/x/git/matching-refs/heads") return [branch];
+    if (path === "repos/red-cup-engineering/x/git/matching-refs/tags") return [tag];
     throw new Error("unexpected API path " + path);
   };
   const rows = await collectGitHubRepositoryDeltas({getJson, repository: repo, includeRefs: true});
@@ -71,7 +71,7 @@ test("opt-in current branch and annotated-tag refs are typed, source-bound and r
     assert.equal(row.source.url, row.material.url, "native source must identify this ref, not the repository homepage");
   }
   assert.equal(rows.find(x => x.source.objectId === tag.ref).material.object.type, "tag");
-  assert.equal(requested.length, 3);
+  assert.equal(requested.length, 5);
   const store = new MemoryReceiptStore(); let admitted = 0;
   const admit = async () => ({receiptId: String(++admitted)});
   const selected = rows.find(x => x.source.objectId === branch.ref);
@@ -89,7 +89,7 @@ test("ref polling refuses repeated and malformed identities before any receiving
   const row = {ref:"refs/heads/a",object:{type:"commit",sha:"a".repeat(40)}};
   const getJson = async path => {
     if (path.includes("/issues?")) return [];
-    if (path.includes("/matching-refs/heads?")) return [row,row];
+    if (path.includes("/matching-refs/heads")) return [row,row];
     return [];
   };
   await assert.rejects(collectGitHubRepositoryDeltas({getJson,repository:repo,includeRefs:true}),/repeated/u);
@@ -265,3 +265,67 @@ test("exact numeric repository identity and pinned object are required before an
  });
  assert.deepEqual(defaults,[]);
 });
+
+test("optional branch/tag fabricator reads complete 161-tag namespace twice without repeated page requests",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x"};
+ const branches=[{ref:"refs/heads/main",object:{type:"commit",sha:"a".repeat(40)}}];
+ const tags=Array.from({length:161},(_,i)=>({ref:"refs/tags/archive/source-"+i,
+  object:{type:"commit",sha:"b".repeat(40)}}));
+ const calls=[];
+ const getJson=async path=>{
+  calls.push(path);
+  if(path.startsWith("repos/red-cup-engineering/x/issues?"))return [];
+  if(path==="repos/red-cup-engineering/x/git/matching-refs/heads")return branches;
+  if(path==="repos/red-cup-engineering/x/git/matching-refs/tags")return tags;
+  throw Error("unexpected source request "+path);
+ };
+ const before=await collectGitHubRepositoryDeltas({getJson,repository:repo,includeRefs:true});
+ assert.equal(before.length,162);
+ assert.equal(calls.filter(x=>x.includes("/matching-refs/heads")).length,2);
+ assert.equal(calls.filter(x=>x.includes("/matching-refs/tags")).length,2);
+ assert.equal(calls.length,5);
+ assert.equal(calls.some(x=>x.includes("/matching-refs/")&&x.includes("?")),false,
+   "Git's prefix-ref endpoint is not an ordinary paginated issues endpoint");
+ assert.equal(new Set(before.map(x=>x.providerObjectKey)).size,162);
+ const after=await collectGitHubRepositoryDeltas({getJson,repository:repo,includeRefs:true});
+ assert.deepEqual(before.map(x=>x.eventKey),after.map(x=>x.eventKey));
+});
+
+test("complete branch/tag source resists retargeting, over-bound refs, duplicates and foreign prefix",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x"};
+ const main={ref:"refs/heads/main",object:{type:"commit",sha:"a".repeat(40)}};
+ const tags=[{ref:"refs/tags/good",object:{type:"tag",sha:"b".repeat(40)}}];
+ const original="repos/red-cup-engineering/x/git/matching-refs/";
+ const source=(heads,tagsSource)=>{
+  let seen=0;return async path=>{
+   if(path.includes("/issues?"))return [];
+   if(path===original+"heads")return typeof heads==="function"?heads(seen++):heads;
+   if(path===original+"tags")return tagsSource;
+   throw Error("unknown Git provider read "+path);
+  };
+ };
+ let cuts=0;
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:source(()=>cuts++===0?[main]:[{...main,object:{type:"commit",sha:"c".repeat(40)}}],tags),
+  repository:repo,includeRefs:true,
+ }),/changed during provider source reading/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:source([main,main],tags),repository:repo,includeRefs:true,
+ }),/Repeated original Git ref/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:source(Array.from({length:513},(_,i)=>({
+   ref:"refs/heads/branch-"+i,object:{type:"commit",sha:"a".repeat(40)},
+  })),tags),repository:repo,includeRefs:true,
+ }),/over bounded source budget/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:source([main,{ref:"refs/heads/../escape",object:{type:"commit",sha:"a".repeat(40)}}],tags),
+  repository:repo,includeRefs:true,
+ }),/refname/u);
+ const neighbor={ref:"refs/tagstones/wrong-prefix",object:{type:"commit",sha:"a".repeat(40)}};
+ const valid=await collectGitHubRepositoryDeltas({
+  getJson:source([main],[neighbor,...tags]),repository:repo,includeRefs:true,
+ });
+ assert.deepEqual(new Set(valid.map(x=>x.source.objectId)),new Set([main.ref,tags[0].ref]));
+ assert.equal(valid.length,2);
+});
+
