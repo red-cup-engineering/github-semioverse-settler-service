@@ -111,7 +111,7 @@ export function gitHubRefLocator(repositoryFullName, ref) {
   if (typeof repositoryFullName !== 'string' ||
       !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repositoryFullName))
     throw new TypeError('GitHub ref locator requires an exact owner/repository name');
-  if (typeof ref !== 'string' || !/^refs\/(?:heads|tags|archive)\/.+$/u.test(ref))
+  if (typeof ref !== 'string' || !/^refs\/(?:(?:heads|tags)\/.+|archive(?:\/.+)?)$/u.test(ref))
     throw new TypeError('GitHub ref locator requires a heads/, tags/ or archive/ identity');
   return 'https://api.github.com/repos/' + repositoryFullName + '/git/refs/' +
     ref.slice('refs/'.length).split('/').map(encodeURIComponent).join('/');
@@ -129,7 +129,7 @@ export function normalizeGitHubEvent(event) {
   const objectId = objectType === 'git_ref' ? object.ref : object.node_id ?? object.id ?? object.number;
   if (objectType === 'git_ref') {
     const ref = object.ref;
-    if (typeof ref !== 'string' || !/^refs\/(?:heads|tags|archive)\/.+$/u.test(ref) ||
+    if (typeof ref !== 'string' || !/^refs\/(?:(?:heads|tags)\/.+|archive(?:\/.+)?)$/u.test(ref) ||
         ref.split('/').some(part => !part || part === '.' || part === '..' ||
           part.startsWith('.') || part.endsWith('.lock')) ||
         ref.endsWith('.') || ref.includes('..') ||
