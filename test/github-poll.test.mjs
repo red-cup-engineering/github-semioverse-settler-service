@@ -412,3 +412,66 @@ test("GHS source→Work projection rejects forged accepted refs, incomplete sour
  assert.throws(()=>projectArchiveRefSelectionsFromCensus(original,[]),TypeError);
  assert.throws(()=>projectArchiveRefSelectionsFromCensus(original,[refName,refName]),TypeError);
 });
+
+
+test("source-only production lot skips unrelated issue and repository payloads",async()=>{
+ const selected={id:561,full_name:"red-cup-engineering/x",default_branch:"main"};
+ const other={id:562,full_name:"red-cup-engineering/y",default_branch:"main"};
+ const sha="a".repeat(40),refName="refs/archive/2026-10-23/preserved-code";
+ const source={repositoryId:selected.id,repositoryFullName:selected.full_name,
+  refName,objectSha:sha,objectType:"commit"};
+ const requested=[];
+ const received=await collectGitHubRepositories({
+  repositories:[selected,other],archiveRefSelections:[source],sourceOnly:true,
+  getJson:async path=>{
+   requested.push(path);
+   if(path==="repos/red-cup-engineering/x")
+    return {id:selected.id,full_name:selected.full_name,default_branch:"main"};
+   if(path==="repos/red-cup-engineering/x/git/ref/archive/2026-10-23/preserved-code")
+    return {ref:refName,object:{type:"commit",sha}};
+   throw new Error("Source-only producer must never read unrelated issues, PRs, refs or repositories: "+path);
+  },
+ });
+ assert.equal(received.length,1);
+ assert.equal(received[0].source.repositoryId,561);
+ assert.equal(received[0].source.objectId,refName);
+ assert.equal(requested.length,4,"two exact repository reads and two exact ref reads");
+ assert.equal(requested.filter(path=>path.includes("/git/ref/")).length,2);
+ assert.equal(requested.some(path=>path.includes("/issues?")||path.includes("/pulls/")||path.includes("/y/")||path.includes("/matching-refs/")),false);
+});
+
+test("source-only producer refuses empty selection, mixed polls, foreign repository and changed source",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x",default_branch:"main"};
+ const refName="refs/archive/2026-10-23/preserved-code";
+ const source={repositoryId:repo.id,repositoryFullName:repo.full_name,
+  refName,objectSha:"a".repeat(40),objectType:"commit"};
+ const forbidden=async()=>{throw new Error("Forbidden provider read before source admission");};
+ for(const mixed of [
+  {archiveRefSelections:[]},
+  {archiveRefSelections:[source],includeRefs:true},
+  {archiveRefSelections:[source],since:"2026-10-01T00:00:00Z"},
+  {archiveRefSelections:[source],state:"closed"},
+ ])await assert.rejects(collectGitHubRepositories({
+  repositories:[repo],sourceOnly:true,getJson:forbidden,...mixed,
+ }),/Source-only Git receiving/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  repository:repo,getJson:forbidden,sourceOnly:true,archiveRefSources:[],
+ }),/Source-only Git receiving/u);
+ await assert.rejects(collectGitHubRepositories({
+  repositories:[repo],sourceOnly:true,
+  archiveRefSelections:[{...source,repositoryId:999}],getJson:forbidden,
+ }),/previously enumerated Git repository/u);
+ let requested=0;
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  repository:repo,sourceOnly:true,archiveRefSources:[source],
+  getJson:async path=>{
+   requested++;
+   if(path==="repos/red-cup-engineering/x")
+    return {id:561,full_name:repo.full_name,default_branch:"main"};
+   if(path==="repos/red-cup-engineering/x/git/ref/archive/2026-10-23/preserved-code")
+    return {ref:refName,object:{type:"commit",sha:"b".repeat(40)}};
+   throw Error("Unexpected source "+path);
+  },
+ }),/changed from its admitted source object/u);
+ assert.equal(requested,2,"stale original SHA refuses at first exact provider read");
+});
