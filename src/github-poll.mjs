@@ -19,6 +19,55 @@ async function pages({ getJson, path, perPage = 30, maxPages = 100 }) {
   throw new Error("GitHub pagination bound reached: " + path);
 }
 
+/** Project an original GitHub Engineering archive-ref census into exact
+ * provider source inputs. The caller explicitly selects 1–8 named refs; a
+ * ref census is historical source evidence, NEVER receiving or authority.
+ * The ordinary native Work normalizer still verifies exact provider material.
+ */
+export function projectArchiveRefSelectionsFromCensus(refCensus, refNames) {
+ if(!refCensus||refCensus.recordKind!=='github.archive-ref-census/v1'
+   ||refCensus.prefix!=='refs/archive'
+   ||refCensus.sourceCoverage!=='complete-exact-archive-ref-list-at-two-reads'
+   ||refCensus.effectsPerformed!==false
+   ||!Number.isSafeInteger(refCensus.repositoryId)||refCensus.repositoryId<1
+   ||typeof refCensus.repositoryFullName!=='string'
+   ||!/^[a-z0-9][a-z0-9.-]*\/[a-z0-9][a-z0-9._-]*$/iu.test(refCensus.repositoryFullName)
+   ||typeof refCensus.defaultBranch!=='string'||!refCensus.defaultBranch
+   ||typeof refCensus.defaultHeadSha!=='string'
+   ||!/^[a-f0-9]{40}$/u.test(refCensus.defaultHeadSha)
+   ||!Array.isArray(refCensus.refs)||refCensus.refs.length>512
+   ||refCensus.refs.length!==refCensus.count)
+   throw new TypeError('Complete original GHS custom Git archive source census required');
+ if(!Array.isArray(refNames)||refNames.length<1||refNames.length>8
+   ||new Set(refNames).size!==refNames.length)
+   throw new TypeError('Explicit one-to-eight distinct original Git ref names required');
+ const observations=new Map();
+ for(const row of refCensus.refs){
+   if(!row||row.recordKind!=='github.archive-ref-observation/v1'
+     ||typeof row.refName!=='string'
+     ||!(row.refName==='refs/archive'||row.refName.startsWith('refs/archive/'))
+     ||!['commit','tag','tree','blob'].includes(row.objectType)
+     ||typeof row.objectSha!=='string'||!/^[a-f0-9]{40}$/u.test(row.objectSha)
+     ||row.sourceConsumerReceiving!=='not-observed'
+     ||row.automaticRefRetirementAllowed!==false
+     ||observations.has(row.refName))
+     throw new TypeError('GHS archive census contains altered or unqualified original Git source');
+   admitGitHubRefName(row.refName);
+   observations.set(row.refName,row);
+ }
+ return Object.freeze(refNames.map(refName=>{
+   const source=observations.get(refName);
+   if(!source)throw new TypeError('Explicitly selected original Git ref absent from qualified census');
+   return Object.freeze({
+     repositoryFullName:refCensus.repositoryFullName,
+     repositoryId:refCensus.repositoryId,
+     refName:source.refName,
+     objectType:source.objectType,
+     objectSha:source.objectSha,
+   });
+ }));
+}
+
 /** One selected historical Git ref is a SOURCE, never a received Work.
  * Its upstream identity is the original GHS census's stable repository ID,
  * original repository name, full ref, exact typed Git target. Do not enumerate
