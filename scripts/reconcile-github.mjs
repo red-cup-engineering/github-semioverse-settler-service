@@ -55,13 +55,45 @@ const owners = (process.env.GITHUB_SETTLER_OWNERS ?? "")
   .filter(Boolean);
 if (owners.length === 0) throw new Error("GITHUB_SETTLER_OWNERS is required");
 
-const repositories = [];
-for (let page = 1; page <= 100; page += 1) {
-  const batch = api("user/repos?sort=full_name&affiliation=owner,organization_member,collaborator&per_page=100&page=" + page);
-  if (!Array.isArray(batch)) throw new Error("GitHub repository inventory was not an array");
-  repositories.push(...batch.filter(repo => owners.includes(repo.owner?.login)));
-  if (batch.length < 100) break;
-  if (page === 100) throw new Error("GitHub repository inventory pagination bound reached");
+const sourceOnly=process.env.GITHUB_SETTLER_ARCHIVE_CENSUS_FILE!==undefined;
+if(sourceOnly && (process.env.GITHUB_SETTLER_SINCE!==undefined
+  ||process.env.GITHUB_SETTLER_INCLUDE_REFS==='1'
+  ||(process.env.GITHUB_SETTLER_STATE!==undefined
+    &&process.env.GITHUB_SETTLER_STATE!=='open')))
+  throw new TypeError('Source-only native Git Work cannot mix issue/PR, branch/tag or time-window polling');
+
+const repositories=[];
+if(sourceOnly){
+  // No global membership inventory or scans of unrelated repositories:
+  // exact qualified upstream census + explicit owner policy + authenticated
+  // individual GitHub provider identity are the actual source admission.
+  const allowedOwners=new Set(owners.map(name=>name.toLowerCase()));
+  const selected=new Map();
+  for(const source of archiveRefSelections){
+    const name=source.repositoryFullName.toLowerCase();
+    if(!allowedOwners.has(name.split('/')[0]))
+      throw new TypeError('Selected original Git repository is outside configured receiving owners');
+    if(selected.has(name) && selected.get(name)!==source.repositoryId)
+      throw new TypeError('Conflicting original Git repository identity');
+    selected.set(name,source.repositoryId);
+  }
+  for(const [name,repositoryId] of selected){
+    const actual=api('repos/'+name);
+    if(!actual||actual.id!==repositoryId
+      ||actual.full_name?.toLowerCase()!==name
+      ||actual.owner?.login?.toLowerCase()!==name.split('/')[0]
+      ||typeof actual.default_branch!=='string'||!actual.default_branch)
+      throw new Error('Authenticated original GitHub source repository identity unavailable');
+    repositories.push(actual);
+  }
+}else{
+  for (let page = 1; page <= 100; page += 1) {
+    const batch = api("user/repos?sort=full_name&affiliation=owner,organization_member,collaborator&per_page=100&page=" + page);
+    if (!Array.isArray(batch)) throw new Error("GitHub repository inventory was not an array");
+    repositories.push(...batch.filter(repo => owners.includes(repo.owner?.login)));
+    if (batch.length < 100) break;
+    if (page === 100) throw new Error("GitHub repository inventory pagination bound reached");
+  }
 }
 
 const deltas = await collectGitHubRepositories({
@@ -73,6 +105,7 @@ const deltas = await collectGitHubRepositories({
   // Explicit source selection; omitting it preserves the original issue/PR
   // and optional head/tag poll. No ambient refs/archive sweep is implied.
   archiveRefSelections,
+  sourceOnly,
 });
 
 const store = new FileReceiptStore(
