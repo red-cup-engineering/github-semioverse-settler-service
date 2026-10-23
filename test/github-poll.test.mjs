@@ -311,7 +311,7 @@ test("complete branch/tag source resists retargeting, over-bound refs, duplicate
  }),/changed during provider source reading/u);
  await assert.rejects(collectGitHubRepositoryDeltas({
   getJson:source([main,main],tags),repository:repo,includeRefs:true,
- }),/Repeated original Git ref/u);
+ }),/repeated original Git ref/u);
  await assert.rejects(collectGitHubRepositoryDeltas({
   getJson:source(Array.from({length:513},(_,i)=>({
    ref:"refs/heads/branch-"+i,object:{type:"commit",sha:"a".repeat(40)},
