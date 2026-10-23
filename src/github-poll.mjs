@@ -176,12 +176,18 @@ async function completeGitRefFamily({getJson,repository,family,maxRefs=512}) {
  return [...first.values()].sort((a,b)=>a.source.objectId.localeCompare(b.source.objectId));
 }
 
-export async function collectGitHubRepositoryDeltas({ getJson, repository, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSources = [] } = {}) {
+export async function collectGitHubRepositoryDeltas({ getJson, repository, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSources = [], sourceOnly = false } = {}) {
   if (!repository || !Number.isInteger(repository.id) || typeof repository.full_name !== "string") {
     throw new TypeError("repository.id and repository.full_name are required");
   }
+  // A selected original Git source is not a request to retrieve every issue
+  // or PR in its repository; unrelated work is a distinct production lot.
+  if(typeof sourceOnly!=='boolean'||sourceOnly && (
+    !Array.isArray(archiveRefSources)||archiveRefSources.length<1
+    ||includeRefs!==false||since!==undefined||state!=='open'))
+    throw new TypeError('Source-only Git receiving requires selected exact refs without general polling');
   const sinceQuery = since === undefined ? "" : "&since=" + encodeURIComponent(required(since, "since"));
-  const issues = await pages({
+  const issues = sourceOnly ? [] : await pages({
     getJson,
     path: "repos/" + repository.full_name + "/issues?state=" + encodeURIComponent(state) + sinceQuery,
     perPage,
@@ -215,13 +221,17 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
   return deltas.sort((left, right) => String(left.source.occurredAt ?? "").localeCompare(String(right.source.occurredAt ?? "")) || left.eventKey.localeCompare(right.eventKey));
 }
 
-export async function collectGitHubRepositories({ getJson, repositories, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSelections = [] } = {}) {
+export async function collectGitHubRepositories({ getJson, repositories, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSelections = [], sourceOnly = false } = {}) {
   if (!Array.isArray(repositories) || repositories.length === 0) throw new TypeError("repositories are required");
   // Select only upstream source-qualified objects already bound to the
   // authenticated repository inventory. An owner/name label alone cannot
   // select changed historical code; the exact Git target must also match.
   if(!Array.isArray(archiveRefSelections)||archiveRefSelections.length>8)
     throw new TypeError('At most eight original archive source selections required');
+  if(typeof sourceOnly!=='boolean'||sourceOnly && (
+    archiveRefSelections.length<1||includeRefs!==false
+    ||since!==undefined||state!=='open'))
+    throw new TypeError('Source-only Git receiving requires selected original refs without general polling');
   const available=new Map();
   for(const repo of repositories){
     if(typeof repo?.full_name!=='string'||!Number.isSafeInteger(repo.id)||repo.id<1
@@ -254,8 +264,10 @@ export async function collectGitHubRepositories({ getJson, repositories, state =
   }
   const result = [];
   for (const repository of repositories) {
+    const selected=byRepository.get(repository.full_name.toLowerCase())??[];
+    if(sourceOnly && selected.length===0)continue;
     result.push(...await collectGitHubRepositoryDeltas({ getJson, repository, state, since, perPage, maxPages, includeRefs,
-      archiveRefSources:byRepository.get(repository.full_name.toLowerCase())??[],
+      archiveRefSources:selected,sourceOnly,
     }));
   }
   return result;
