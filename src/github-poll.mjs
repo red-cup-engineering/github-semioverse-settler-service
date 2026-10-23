@@ -113,7 +113,7 @@ async function completeGitRefFamily({getJson,repository,family,maxRefs=512}) {
      // as refs/tagstones/* is NOT part of refs/tags/*.
      if(!row.ref.startsWith(prefix))continue;
      if(result.has(row.ref))
-       throw new Error('Repeated original Git ref in complete namespace source');
+       throw new Error('repeated original Git ref in complete namespace source');
      admitGitHubRefName(row.ref);
      result.set(row.ref,normalizeGitHubEvent({action:'observed',repository,git_ref:row}));
    }
