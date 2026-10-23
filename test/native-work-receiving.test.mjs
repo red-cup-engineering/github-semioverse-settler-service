@@ -234,6 +234,106 @@ test('a snapshot without a sender is admitted and exact replay does not open aga
   assert.equal(recovered.material.body, 'Original customer words');
 });
 
+test('removing an authored source requirement or tag is a new interpretation, not exact replay', async () => {
+  const request = input();
+  request.opening = {
+    move: 'request', need: 'Source transitions remain evidence-qualified.',
+    requirements: ['The receiver shall preserve source changes.'],
+    conditions: ['A changed source must be re-evaluated.'],
+    tags: ['evidence-bound'],
+  };
+  const initial = prepareGitHubWork(request);
+  for (const changed of [
+    { ...request.opening, tags: undefined },
+    { ...request.opening, conditions: undefined },
+    { ...request.opening, requirements: undefined },
+  ]) {
+    const next = prepareGitHubWork({ ...request, opening: Object.fromEntries(
+      Object.entries(changed).filter(([, value]) => value !== undefined)) });
+    const newThread = { ...stored(next), id: 'new-thread' };
+    let opens = 0;
+    const received = await receivePreparedGitHubWork({
+      prepared: next,
+      call: async (verb, args) => {
+        if (verb === 'work-open') { opens++; return { id: newThread.id }; }
+        return args.source
+          ? { position: 'source-position', matched: 1, threads: [stored(initial)] }
+          : { threads: [newThread] };
+      },
+    });
+    assert.equal(opens, 1, 'removed terms must not inherit older native Work identity');
+    assert.equal(received.replay, false);
+    assert.equal(received.thread, 'new-thread');
+  }
+});
+
+test('two native Work threads with the same provider material cannot be silently selected by query order', async () => {
+  const prepared = prepareGitHubWork(input());
+  const first = stored(prepared);
+  const second = { ...stored(prepared), id: 'other-native-thread' };
+  await assert.rejects(receivePreparedGitHubWork({
+    prepared,
+    call: async (verb) => {
+      assert.equal(verb, 'work-board', 'source ambiguity must not trigger another Work opening');
+      return { position: 'same', matched: 2, threads: [first, second] };
+    },
+  }), /ambiguous exact receiving threads/);
+});
+
+test('native Work feedback is read from the same original thread without claiming external customer delivery', async () => {
+  const request = input();
+  request.opening = {
+    move: 'request', need: 'Changes are independently received.',
+    requirements: ['The change process shall return an independent receiver verdict.'],
+    conditions: ['A source-identified Work deliverable has a receiver judgment.'],
+  };
+  const prepared = prepareGitHubWork(request);
+  const first = stored(prepared);
+  const accepted = { ...stored(prepared), standing: 'accepted',
+    deliveries: [{ verdict: 'accepted', claims: [{ condition: 'delivery' }], evidence: ['assayer:confirmed'] }] };
+  const pending = { ...stored(prepared), standing: 'delivered',
+    deliveries: [{ evidence: ['source:proposal'], claims: [{ condition: 'delivery' }] }] };
+  let current = first, opens = 0;
+  const call = async (verb, args) => {
+    if (verb === 'work-open') { opens++; throw new Error('source already recorded'); }
+    assert.equal(verb, 'work-board');
+    return { position: 'one', matched: 1, threads: [current] };
+  };
+
+  const opened = await receivePreparedGitHubWork({ prepared, call });
+  assert.equal(opened.nativeWork.standing, 'open');
+  assert.equal(opened.nativeWork.assayerReadout, 'unavailable',
+    'a source board that did not report its deliveries must not pretend to report zero');
+  assert.equal(opened.nativeWork.deliveries, null);
+
+  current = pending;
+  const delivered = await receivePreparedGitHubWork({ prepared, call });
+  assert.equal(delivered.nativeWork.assayerReadout, 'awaiting-assayer');
+  assert.deepEqual(delivered.nativeWork.deliveries,
+    { total: 1, accepted: 0, rejected: 0, awaitingAssayer: 1 });
+
+  current = accepted;
+  const judged = await receivePreparedGitHubWork({ prepared, call });
+  assert.equal(judged.replay, true);
+  assert.equal(judged.nativeWork.assayerReadout, 'accepted-in-work-arena');
+  assert.equal(judged.nativeWork.deliveries.accepted, 1);
+  assert.equal(judged.nativeWork.independentCustomerReceiving, 'not-established-by-this-source');
+  assert.equal(judged.stages.accepted, false,
+    'an arrival receipt remains arrival-only even when a later native Work judgment exists');
+  assert.equal(opens, 0);
+});
+
+test('accepted-looking Work standing without an observed accepted delivery is not a receiving receipt', async () => {
+  const prepared = prepareGitHubWork(input());
+  const actual = { ...stored(prepared), standing: 'accepted', deliveries: [] };
+  const receipt = await receivePreparedGitHubWork({ prepared, call: async () =>
+    ({ position: 'one', matched: 1, threads: [actual] }) });
+  assert.equal(receipt.nativeWork.standing, 'accepted');
+  assert.equal(receipt.nativeWork.assayerReadout, 'no-received-delivery');
+  assert.equal(receipt.nativeWork.deliveries.accepted, 0);
+  assert.equal(receipt.stages.accepted, false);
+});
+
 test('branch and tag source selectors retain distinct GitHub ref identities in native Work', () => {
   const sample = input();
   const repository = { ...sample.event.repository, html_url: 'https://github.com/house/site' };
