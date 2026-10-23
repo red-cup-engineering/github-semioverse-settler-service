@@ -104,6 +104,20 @@ const revisionFor = (type, object, event) => {
   return object.updated_at ?? object.submitted_at ?? object.created_at ?? object.sha ?? event.delivery_id;
 };
 
+/** Admit one exact GitHub Git refname before provider access, source normalization
+ * and original Work locator projection. This is a shared source rule, not a new
+ * ref-receiving authority or a claim that its object has been integrated. */
+export function admitGitHubRefName(ref) {
+  if (typeof ref !== 'string' || !/^refs\/(?:(?:heads|tags)\/.+|archive(?:\/.+)?)$/u.test(ref) ||
+      ref.split('/').some(part => !part || part === '.' || part === '..' ||
+        part.startsWith('.') || part.endsWith('.lock')) ||
+      ref.endsWith('.') || ref.includes('..') ||
+      ['~', '^', ':', '?', '*', '[', '\\', '@{'].some(bad => ref.includes(bad)) ||
+      /[\u0000-\u0020\u007F]/u.test(ref))
+    throw new TypeError('GitHub Git ref requires a valid heads/, tags/ or archive/ refname');
+  return ref;
+}
+
 /** Exact GitHub REST identity for one *current* branch or tag ref.
  * Custom refs/archive/* is preserved native Git source, not a tag or a Work receipt.
  * This is a source locator, not the historical material receipt or a merge grant. */
@@ -113,6 +127,7 @@ export function gitHubRefLocator(repositoryFullName, ref) {
     throw new TypeError('GitHub ref locator requires an exact owner/repository name');
   if (typeof ref !== 'string' || !/^refs\/(?:(?:heads|tags)\/.+|archive(?:\/.+)?)$/u.test(ref))
     throw new TypeError('GitHub ref locator requires a heads/, tags/ or archive/ identity');
+  admitGitHubRefName(ref);
   return 'https://api.github.com/repos/' + repositoryFullName + '/git/refs/' +
     ref.slice('refs/'.length).split('/').map(encodeURIComponent).join('/');
 }
@@ -128,14 +143,7 @@ export function normalizeGitHubEvent(event) {
   // or a provider GraphQL node that may change after deletion/recreation.
   const objectId = objectType === 'git_ref' ? object.ref : object.node_id ?? object.id ?? object.number;
   if (objectType === 'git_ref') {
-    const ref = object.ref;
-    if (typeof ref !== 'string' || !/^refs\/(?:(?:heads|tags)\/.+|archive(?:\/.+)?)$/u.test(ref) ||
-        ref.split('/').some(part => !part || part === '.' || part === '..' ||
-          part.startsWith('.') || part.endsWith('.lock')) ||
-        ref.endsWith('.') || ref.includes('..') ||
-        ['~', '^', ':', '?', '*', '[', '\\', '@{'].some(bad => ref.includes(bad)) ||
-        /[\u0000-\u0020\u007F]/u.test(ref))
-      throw new TypeError('GitHub Git ref requires a valid heads/, tags/ or archive/ refname');
+    admitGitHubRefName(object.ref);
     if (!['commit', 'tag', 'tree', 'blob'].includes(object.object?.type) ||
         !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(object.object?.sha ?? ''))
       throw new TypeError('GitHub Git ref requires an exact typed SHA-1 or SHA-256 target');
