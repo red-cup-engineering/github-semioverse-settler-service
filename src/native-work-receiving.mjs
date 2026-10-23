@@ -27,10 +27,15 @@ function retainedReplayDocument(opening, input, envelope) {
     const expected = { ...input, sources: input.sources.map(source =>
       source.kind === 'github-source-document' ? document : source),
       ...(input.evidence === undefined ? {} : {evidence: input.evidence.map(value => value === input.sources.find(source => source.kind === 'github-source-document')?.locator ? document.locator : value)}) };
-    // Leave interpretation and scope comparison to the same normalization as
-    // exact replay. Reuse the recorded carrier; never rewrite its bytes or NI.
-    if (Object.entries(expected).filter(([key]) => key !== 'as')
-      .every(([key, value]) => openingFieldEqual(key,opening[key],value))) return Object.freeze({ ...document });
+    // A native opening also contains board-owned identity, actor and edition.
+    // Compare BOTH directions for all caller-authored semantic fields: if
+    // an original requirement, condition, tag, source or receiving term was
+    // deleted from the new interpretation it is not an exact replay.
+    const boardOwned = new Set(['as','id','by','hand','at','edition','decidedBy']);
+    const authored = new Set([...Object.keys(expected),...Object.keys(opening)]);
+    if ([...authored].filter(key => !boardOwned.has(key))
+      .every(key => openingFieldEqual(key,opening[key],expected[key])))
+      return Object.freeze({ ...document });
   }
   return undefined;
 }
@@ -173,6 +178,10 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
 
     const replayDocument = retainedReplayDocument(item.opening, input, offeredObservation) ?? retainedReportReplay(item, input, offeredObservation);
     if (replayDocument) {
+      // Two distinct accepted openings asserting exact replay are a source
+      // divergence, not a reason to pick the last Work thread returned.
+      if (known !== undefined && known.id !== item.id)
+        throw new Error('native source selection has ambiguous exact receiving threads');
       known = item; retainedDocument = replayDocument;
       const sayings=[item.opening,...(item.corroborations??[]),...(item.restatements??[])];
       const selected=sayings.map(saying=>retainedGitHubEvidence(input.evidence??[],saying.evidence??[])).find(value=>value!==undefined);
@@ -196,6 +205,31 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
   }
   const offeredSourceRetained = receivedDocument.locator === document.locator;
   const routed = actual.home === receiver;
+  // Re-evaluate the SAME original Work at each observed source readback.
+  // Opening admission is only a source-custody effect, whereas the later
+  // Work assayer's verdict and an external beneficiary's acceptance are
+  // different events. Missing delivered evidence must remain unknown, not 0.
+  const deliveries = Array.isArray(actual.deliveries) ? actual.deliveries : null;
+  const counted = deliveries === null ? null : Object.freeze({
+    total: deliveries.length,
+    accepted: deliveries.filter(item => item?.verdict === 'accepted').length,
+    rejected: deliveries.filter(item => item?.verdict === 'rejected').length,
+    awaitingAssayer: deliveries.filter(item => item?.verdict === undefined).length,
+  });
+  const nativeWork = Object.freeze({
+    kind: 'semioverse.github-native-work-reading.v1',
+    opening: actual.opening.move,
+    standing: typeof actual.standing === 'string' ? actual.standing : null,
+    assayerReadout: deliveries === null ? 'unavailable' :
+      counted.accepted > 0 && actual.standing === 'accepted' ? 'accepted-in-work-arena' :
+      counted.rejected > 0 ? 'rejected-in-work-arena' :
+      counted.awaitingAssayer > 0 ? 'awaiting-assayer' : 'no-received-delivery',
+    deliveries: counted,
+    originalWorkSource: thread,
+    originalProviderSource: envelope.source.url,
+    independentCustomerReceiving: 'not-established-by-this-source',
+    effect: 'read-only-native-source-projection',
+  });
   return Object.freeze({
     state: routed ? 'NATIVE_RECEIVED' : 'NATIVE_RECEIVED_UNROUTED',
     thread,
@@ -209,6 +243,7 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
     postedBy: receivedEvidence?.entry.player ?? actual.opening.by,
     replay: known !== undefined,
     standing: actual.standing,
+    nativeWork,
     // Receipt stages stay distinct: no promise, allocation, implementation or
     // customer acceptance is inferred from delivery of a source document.
     stages: Object.freeze({ sourceRetained: true, offeredSourceRetained, nativeAdmitted: true, routed, allocated: false, implemented: false, accepted: false }),
