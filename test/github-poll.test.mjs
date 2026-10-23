@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { collectGitHubRepositoryDeltas, collectGitHubRepositories, projectArchiveRefSelectionsFromCensus } from "../src/github-poll.mjs";
 import { MemoryReceiptStore, normalizeGitHubEvent, settleGitHubEnvelope } from "../src/settler.mjs";
+import { prepareGitHubWork, readGitHubSourceDocument } from "../src/native-work-receiving.mjs";
 
 test("poller paginates and preserves exact PR head revision", async () => {
   const calls = [];
@@ -477,7 +478,7 @@ test("source-only producer refuses empty selection, mixed polls, foreign reposit
 });
 
 
-test("original GHS archive TAG census feeds selected source to the existing native Work receiver",async()=>{
+test("original GHS archive TAG census feeds the existing replay-safe Git source transport",async()=>{
  // This is the output shape of the original GitHub Engineering
  // observeArchiveRefCensus, not the separate custom refs/archive namespace.
  const repository={id:1284325652,full_name:"561-group/bare-cedar-fog",default_branch:"main"};
@@ -529,6 +530,8 @@ test("original GHS archive TAG census feeds selected source to the existing nati
  assert.equal(byRef.get(annotatedRef).source.revision,annotatedObject,
   "the Git tag-object OID must never be substituted with a peeled commit");
  assert.notEqual(byRef.get(tagRef).providerObjectKey,byRef.get(annotatedRef).providerObjectKey);
+ // Mock durable transport reception does NOT establish admitted native Work,
+ // consumer acceptance or a private-source disclosure grant.
  const store=new MemoryReceiptStore();
  let admitted=0;
  const admit=async()=>({receiptId:String(++admitted)});
@@ -550,4 +553,38 @@ test("original GHS archive TAG census feeds selected source to the existing nati
   {...census,refs:[tag,{...annotated,refName:"refs/tags/archive-other/foreign"}]},
  ])assert.throws(()=>projectArchiveRefSelectionsFromCensus(corrupt,[tagRef]),TypeError);
  assert.throws(()=>projectArchiveRefSelectionsFromCensus(census,["refs/archive/unrelated"]),TypeError);
+});
+
+
+test("typed archive-tag source respects the original native Work audience boundary",()=>{
+ const repo={id:42,full_name:"red-cup-engineering/public-reference",private:true};
+ const ref="refs/tags/archive/retained-agent-code",sha="a".repeat(40);
+ const event={
+  action:"observed",repository:repo,
+  git_ref:{ref,object:{type:"tag",sha}},
+ };
+ const opening={
+  move:"report",law:"Source observation is not content receiving",
+  subject:"git-ref-typed-test",observation:"Retained source requires owner review",
+ };
+ const binding={
+  repositoryId:42,visibility:"public",
+  scope:["section:red-cup-engineering"],receiver:"section:red-cup-engineering",
+ };
+ assert.throws(()=>prepareGitHubWork({event,opening,binding}),
+  /private or unknown source audience is not verified/u,
+  "typed evidence cannot bypass a private repository disclosure boundary");
+
+ // A *hypothetical public* repository under the same provider format is
+ // admissible to prepare for an independently verified public native caller.
+ // Preparation is not transport execution, Work acceptance or public posting.
+ const publicEvent={...event,repository:{...repo,private:false}};
+ const prepared=prepareGitHubWork({event:publicEvent,opening,binding});
+ assert.equal(prepared.envelope.source.objectId,ref);
+ assert.equal(prepared.envelope.source.revision,sha);
+ assert.equal(prepared.envelope.material.object.type,"tag");
+ assert.equal(prepared.input.sources[0].kind,"github-git-ref");
+ assert.equal(prepared.input.sources[1].kind,"github-source-document");
+ assert.equal(readGitHubSourceDocument(prepared.document).source.objectId,ref);
+ assert.equal(prepared.receiver,binding.receiver);
 });
