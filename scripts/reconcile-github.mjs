@@ -34,6 +34,10 @@ const deltas = await collectGitHubRepositories({
   state: process.env.GITHUB_SETTLER_STATE ?? "open",
   since: process.env.GITHUB_SETTLER_SINCE,
   includeRefs: process.env.GITHUB_SETTLER_INCLUDE_REFS === "1",
+  // Explicit source selection; omitting it preserves the original issue/PR
+  // and optional head/tag poll. No ambient refs/archive sweep is implied.
+  archiveRefSelections: process.env.GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS
+    ? JSON.parse(process.env.GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS) : [],
 });
 
 const store = new FileReceiptStore(
