@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectGitHubRepositoryDeltas, collectGitHubRepositories } from "../src/github-poll.mjs";
+import { collectGitHubRepositoryDeltas, collectGitHubRepositories, projectArchiveRefSelectionsFromCensus } from "../src/github-poll.mjs";
 import { MemoryReceiptStore, normalizeGitHubEvent, settleGitHubEnvelope } from "../src/settler.mjs";
 
 test("poller paginates and preserves exact PR head revision", async () => {
@@ -329,3 +329,86 @@ test("complete branch/tag source resists retargeting, over-bound refs, duplicate
  assert.equal(valid.length,2);
 });
 
+
+
+test("source-owned GHS archive JSON really feeds one pinned GitHub Semioverse event", async()=>{
+ const repository={id:561,full_name:"red-cup-engineering/x",default_branch:"main"};
+ const sha="a".repeat(40),commit="b".repeat(40);
+ const refName="refs/archive/2026-10-23/agent-unreceived-source";
+ const refCensus={
+  recordKind:"github.archive-ref-census/v1",
+  repositoryId:repository.id,repositoryFullName:repository.full_name,
+  defaultBranch:"main",defaultHeadSha:sha,
+  sourceCoverage:"complete-exact-archive-ref-list-at-two-reads",
+  prefix:"refs/archive",count:2,effectsPerformed:false,
+  refs:[
+   {recordKind:"github.archive-ref-observation/v1",
+    refName,objectSha:commit,objectType:"commit",
+    sourceConsumerReceiving:"not-observed",automaticRefRetirementAllowed:false},
+   {recordKind:"github.archive-ref-observation/v1",
+    refName:"refs/archive/2026-10-23/other-source",objectSha:"c".repeat(40),objectType:"tag",
+    sourceConsumerReceiving:"not-observed",automaticRefRetirementAllowed:false},
+  ],
+ };
+ const selections=projectArchiveRefSelectionsFromCensus(refCensus,[refName]);
+ assert.deepEqual(selections,[{
+  repositoryFullName:repository.full_name,repositoryId:repository.id,
+  refName,objectSha:commit,objectType:"commit",
+ }]);
+ assert.equal(Object.isFrozen(selections),true);
+ const called=[];
+ const output=await collectGitHubRepositories({
+  repositories:[repository],archiveRefSelections:selections,
+  getJson:async path=>{
+   called.push(path);
+   if(path.includes("/issues?"))return [];
+   if(path==="repos/red-cup-engineering/x")
+    return {id:561,full_name:repository.full_name,default_branch:"main"};
+   if(path==="repos/red-cup-engineering/x/git/ref/archive/2026-10-23/agent-unreceived-source")
+    return {ref:refName,object:{sha:commit,type:"commit"}};
+   throw new Error("unexpected GitHub source "+path);
+  },
+ });
+ assert.equal(output.length,1);
+ assert.equal(output[0].source.objectId,refName);
+ assert.equal(output[0].source.repositoryId,561);
+ assert.equal(output[0].source.revision,commit);
+ assert.equal(called.filter(p=>p.includes("/git/ref/archive/")).length,2);
+ assert.equal(called.some(p=>p.includes("matching-refs")),false);
+ const store=new MemoryReceiptStore();
+ let witnessed=0;
+ const nativeAdmit=async()=>({receiptId:String(++witnessed)});
+ assert.equal((await settleGitHubEnvelope({envelope:output[0],receiptStore:store,admit:nativeAdmit})).state,"RECEIVED");
+ assert.equal((await settleGitHubEnvelope({envelope:output[0],receiptStore:store,admit:nativeAdmit})).state,"DUPLICATE_RECEIVED");
+ assert.equal(witnessed,1);
+});
+
+test("GHS source→Work projection rejects forged accepted refs, incomplete source or wrong namespace",()=>{
+ const sha="a".repeat(40),refName="refs/archive/2026-10-23/real";
+ const original={
+  recordKind:"github.archive-ref-census/v1",
+  repositoryId:561,repositoryFullName:"red-cup-engineering/x",
+  defaultBranch:"main",defaultHeadSha:sha,
+  sourceCoverage:"complete-exact-archive-ref-list-at-two-reads",
+  prefix:"refs/archive",count:1,effectsPerformed:false,
+  refs:[{
+   recordKind:"github.archive-ref-observation/v1",
+   refName,objectSha:sha,objectType:"commit",
+   sourceConsumerReceiving:"not-observed",automaticRefRetirementAllowed:false,
+  }],
+ };
+ for(const invalid of [
+  {...original,prefix:"refs/tags/archive"},
+  {...original,count:2},
+  {...original,sourceCoverage:"partial"},
+  {...original,effectsPerformed:true},
+  {...original,repositoryId:0},
+  {...original,refs:[{...original.refs[0],sourceConsumerReceiving:"received"}]},
+  {...original,refs:[{...original.refs[0],automaticRefRetirementAllowed:true}]},
+  {...original,refs:[{...original.refs[0],refName:"refs/heads/false-archive"}]},
+  {...original,refs:[original.refs[0],original.refs[0]],count:2},
+ ])assert.throws(()=>projectArchiveRefSelectionsFromCensus(invalid,[refName]),TypeError);
+ assert.throws(()=>projectArchiveRefSelectionsFromCensus(original,["refs/archive/missing"]),TypeError);
+ assert.throws(()=>projectArchiveRefSelectionsFromCensus(original,[]),TypeError);
+ assert.throws(()=>projectArchiveRefSelectionsFromCensus(original,[refName,refName]),TypeError);
+});
