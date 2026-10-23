@@ -463,45 +463,66 @@ locators and public-audience/authority guards are unchanged. Existing durable
 settlement/readback and authorization policy are reused, with no new Work
 registry or receipt database.
 
-### Receive one original custom Git archive source, not an ambient backlog
+### Fabricate one source-qualified historical Git ref into the existing Work receiver
 
-A separate **native Git custom-ref namespace** `refs/archive/*` holds
-historical agent work. It is not `refs/tags/archive/*` and does not confer an
-archive receipt. GitHub's `git/matching-refs/archive` endpoint was observed
-returning the **same 504 references for both `page=1` and `page=2`**;
-the ordinary paginated head/tag loop is **incorrect** for this endpoint.
-The original `github-poll` adapter therefore performs two whole-response
-reads at the same exact GitHub API address, validates complete source
-identity with a 512-ref bound, and emits **only explicitly selected** ref
-events into the *existing* `normalizeGitHubEvent` and durable native
-Work receiver. There is no new archive queue, receipt store or data source.
+Custom Git `refs/archive/*` references hold unfinished or unprocessed code;
+they are **not** `refs/tags/archive/*` tags or completed Work receipts. The
+original `github-poll` used to read a complete `git/matching-refs/archive`
+namespace *twice* even to receive one selected reference. On a real Git
+Services source cut the complete response contained 15 refs/8,053 bytes,
+versus one exact `git/ref/archive/...` response of 531 bytes; Bare Cedar
+Fog has previously exposed 504 custom refs. GitHub also ignored conventional
+`page=1`/`page=2` pagination for that namespace. Repeating large reads
+does not increase receiving quality or capacity.
 
-The original `reconcile-github` executable accepts one typed environment
-value to specify at most eight selections under repositories already
-admitted by the authenticated original owner inventory:
+The original producer now uses **standard GitHub REST exact-reference
+coordinates**. It selects 1–8 original, fully qualified Git source objects,
+fetches *only* those refs twice plus repository identity before and after,
+and retains the exact GitHub target bytes in the existing
+`semioverse.github-delta.v1` and native Work evidence. Each selected source
+is a strict closed record with the same descriptive fields as the upstream
+GitHub Engineering `github.archive-ref-census/v1` joined to its
+`github.archive-ref-observation/v1` entry:
+
+- `repositoryFullName` and `repositoryId`: authenticated GitHub identity
+  in the original visible repository inventory, never inferred from a path
+- `refName`: full Git name in `refs/archive` or `refs/archive/*`
+- `objectType` and `objectSha`: exact Git commit/tag/blob/tree target;
+  no unpinned historical source may be promoted
+
+Use the existing `reconcile-github` entry, providing a single JSON array
+through its original operator-owned selection environment. This particular
+Git Services ref/object pair was read through the authenticated GitHub
+provider; a different repository or ref needs its own current read:
 
 ```sh
-GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS='[{"repository":"red-cup-engineering/git-services-section","refName":"refs/archive/2026-10-09/codex/github-closed-work-observation"}]' \
+GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS='[{"repositoryFullName":"red-cup-engineering/git-services-section","repositoryId":1325533741,"refName":"refs/archive/2026-10-09/codex/github-closed-work-observation","objectType":"commit","objectSha":"e01987924f9170146b39b0e917210792ff8da9ee"}]' \
   node scripts/reconcile-github.mjs
 ```
 
-Absent this variable, ordinary issue/PR scanning and optional
-`GITHUB_SETTLER_INCLUDE_REFS=1` head/tag polling remain unchanged.
-The native `github:repo:<ID>:git_ref:<FULL_GIT_REF>` identity,
-original SHA/object type, material digest and
-`https://api.github.com/repos/OWNER/REPO/git/refs/archive/...` locator
-flow into the existing native Work source document; a replay of unchanged
-source uses the original receipt. A relocated or retargeted Git object is a
-new *observation*, not permission to integrate or retire history.
+The producer refuses old name-only selections, unknown input fields,
+stale or differing numeric repository identities, Git target retargeting,
+missing original ref, invalid refnames, and changed provider material
+between reads. Its reading is **selected-ref-only**, not a complete Git ref
+namespace census or authority to delete a branch. Unlike a namespace census,
+a repository containing 513 or more historical refs does not bar selecting
+one exact, known original object.
 
-The separate
-[GitHub Engineering estate source reader](https://github.com/red-cup-engineering/github-engineering-services-section/pull/113)
-owns exact historical source-tree differences and the source/issue/consumer
-receiving gesture. The [original Coesite receiving method](https://github.com/coesite-operations/operations-services-section/blob/main/lib/agency/skills/receive-repository-integration/SKILL.md)
-owns independent acceptance. This settler carries a truthful selected provider
-signal into native Work; it does not infer that all 504 old refs require
-504 new Work assignments, receive them automatically, delete custom refs or
-mint authority from a name.
+With no selection, ordinary issues/PRs and optional
+`GITHUB_SETTLER_INCLUDE_REFS=1` branch/tag polling behave as before.
+No separate queue, ticket board, release registry, archive database,
+published package or independent receiving authority is created. The
+original replay/durable claim path receives the typed Git source event once,
+and subsequent identical observations converge on its existing receipt.
+
+The original
+[GitHub Engineering selected-source reader](https://github.com/red-cup-engineering/github-engineering-services-section/pull/113)
+owns historical commit/tree differences and source-to-writer/schema/consumer
+Work gestures. The original [Coesite receiving method](https://github.com/coesite-operations/operations-services-section/blob/main/lib/agency/skills/receive-repository-integration/SKILL.md)
+independently judges actual Work and consumer acceptance. The
+`github-git-ref` source locator points at an observable GitHub resource,
+not a completed code fabrication, package publication, machine installation,
+approved content review or economic settlement.
 
 These are **snapshots of currently observed refs**. Their lack of a GitHub
 change timestamp is preserved; a later missing ref is not automatically
