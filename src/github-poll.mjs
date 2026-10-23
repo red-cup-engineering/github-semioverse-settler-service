@@ -90,6 +90,43 @@ async function selectedArchiveRefDeltas({getJson,repository,sources}) {
  return first;
 }
 
+/** Complete current Git ref-family observation, independent from issue/PR
+ * pagination. GitHub matching-refs is a prefix lookup, not a paged listing:
+ * page=1 and page=2 can return the same entire set. A double read binds the
+ * same source cut before downstream Work projection. A bounded unavailable
+ * namespace remains unavailable; it must not be reported as an empty one. */
+async function completeGitRefFamily({getJson,repository,family,maxRefs=512}) {
+ if(!['heads','tags'].includes(family)||!Number.isSafeInteger(maxRefs)
+   ||maxRefs<1||maxRefs>512)
+   throw new TypeError('One exact bounded original Git reference family required');
+ const path='repos/'+repository.full_name+'/git/matching-refs/'+family;
+ const prefix='refs/'+family+'/';
+ const read=async()=>{
+   const rows=await getJson(path);
+   if(!Array.isArray(rows)||rows.length>maxRefs)
+     throw new RangeError('Complete Git reference family unavailable or over bounded source budget');
+   const result=new Map();
+   for(const row of rows){
+     if(typeof row?.ref!=='string'||!row.ref.startsWith('refs/'+family))
+       throw new TypeError('Git ref family source returned a foreign source identity');
+     // REST matching-refs is a string-prefix query; a returned neighbor such
+     // as refs/tagstones/* is NOT part of refs/tags/*.
+     if(!row.ref.startsWith(prefix))continue;
+     if(result.has(row.ref))
+       throw new Error('Repeated original Git ref in complete namespace source');
+     admitGitHubRefName(row.ref);
+     result.set(row.ref,normalizeGitHubEvent({action:'observed',repository,git_ref:row}));
+   }
+   return result;
+ };
+ const first=await read(),second=await read();
+ const equal=items=>JSON.stringify([...items.entries()].map(([name,envelope])=>
+   [name,envelope.eventKey,envelope.materialIdentity]).sort((a,b)=>a[0].localeCompare(b[0])));
+ if(equal(first)!==equal(second))
+   throw new Error('Complete Git reference family changed during provider source reading');
+ return [...first.values()].sort((a,b)=>a.source.objectId.localeCompare(b.source.objectId));
+}
+
 export async function collectGitHubRepositoryDeltas({ getJson, repository, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSources = [] } = {}) {
   if (!repository || !Number.isInteger(repository.id) || typeof repository.full_name !== "string") {
     throw new TypeError("repository.id and repository.full_name are required");
@@ -120,21 +157,11 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
   if (archiveRefSources.length)
     deltas.push(...await selectedArchiveRefDeltas({getJson,repository,sources:archiveRefSources}));
   if (includeRefs) {
-    const seen = new Set();
-    for (const family of ["heads", "tags"]) {
-      const refs = await pages({
-        getJson,
-        path: "repos/" + repository.full_name + "/git/matching-refs/" + family,
-        perPage, maxPages,
-      });
-      for (const ref of refs) {
-        if (typeof ref?.ref !== "string" || !ref.ref.startsWith("refs/" + family + "/") ||
-            seen.has(ref.ref))
-          throw new Error("GitHub Git reference identity is missing, outside selected family or repeated");
-        seen.add(ref.ref);
-        deltas.push(normalizeGitHubEvent({ action: "observed", repository, git_ref: ref }));
-      }
-    }
+    // Unlike GitHub issues, native git/matching-refs ignores ordinary
+    // per_page/page. Keep whole-namespace observation separate from exact
+    // refs/archive source selection and its quoted object-ID contract.
+    for (const family of ["heads", "tags"])
+      deltas.push(...await completeGitRefFamily({getJson,repository,family}));
   }
   return deltas.sort((left, right) => String(left.source.occurredAt ?? "").localeCompare(String(right.source.occurredAt ?? "")) || left.eventKey.localeCompare(right.eventKey));
 }
