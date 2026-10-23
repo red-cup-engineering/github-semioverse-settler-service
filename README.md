@@ -490,11 +490,39 @@ GitHub Engineering `github.archive-ref-census/v1` joined to its
 - `objectType` and `objectSha`: exact Git commit/tag/blob/tree target;
   no unpinned historical source may be promoted
 
-Use the existing `reconcile-github` entry, providing a single JSON array
-through its original operator-owned selection environment. This particular
-Git Services ref/object pair was read through the authenticated GitHub
-provider; a different repository or ref needs its own current read:
+**Preferred producer-to-consumer route.** The existing GitHub Engineering
+`reconcile-github-estate --assess-archive-sources` reader first emits
+its original source-qualified JSON report. Its single `sourceRefAssays[0]`
+is a `github.archive-ref-census/v1` with full Git repository/ref/object
+coordinates, produced under the original Draft 2020-12 contract.
+The original Semioverse settler now **reads that JSON as an actual input**:
+an operator names one or more preserved refs, and the same producer projects
+the exact `repositoryId`, `repositoryFullName`, `refName`, `objectType`,
+and `objectSha` into the existing typed Git source→Work receiver.
 
+```sh
+# Select an actual report previously produced by GitHub Engineering.
+GITHUB_SETTLER_OWNERS=red-cup-engineering \
+GITHUB_SETTLER_ARCHIVE_CENSUS_FILE=/path/to/existing-ghs-report.json \
+GITHUB_SETTLER_ARCHIVE_SELECTED_REFS='["refs/archive/2026-10-09/codex/github-closed-work-observation"]' \
+  node scripts/reconcile-github.mjs
+```
+
+This explicit **source-only** mode does not retrieve a global repository
+inventory or unrelated issues, PRs, branches and tags. It checks the selected
+repository identity against both the configured owner and authenticated GitHub
+provider, then reads only the exact selected Git refs twice. It also refuses
+mixed source-only/general-polling requests. The report is an operator-selected
+regular, non-symlink UTF-8 file no larger than 1 MiB; changed or incomplete
+input refuses. An unknown or retargeted ref cannot become received Work.
+One standalone original `refCensus` may be supplied instead of the complete
+report. No additional state store or archive queue is introduced.
+
+The original manually pinned five-field JSON input through
+`GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS` remains available for ordinary
+reconciliation. This example is source selection, not proof of installed
+Semioverse Work receiving or an authority to retire historical code.
+A different repository or ref requires its own authentic source acquisition.
 ```sh
 GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS='[{"repositoryFullName":"red-cup-engineering/git-services-section","repositoryId":1325533741,"refName":"refs/archive/2026-10-09/codex/github-closed-work-observation","objectType":"commit","objectSha":"e01987924f9170146b39b0e917210792ff8da9ee"}]' \
   node scripts/reconcile-github.mjs
