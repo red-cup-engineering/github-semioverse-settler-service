@@ -526,7 +526,18 @@ name. The existing `GITHUB_SETTLER_ARCHIVE_SELECTED_REFS` setting selects
 that exact tag from the matching report, not from a custom-ref census.
 The source remains unreceived until the rightful original Guix consumer and
 Coesite receiving prove useful integration; this bridge only admits a typed
-provider source into native Work.
+provider source into its bounded Git source/transport workflow.
+
+**Private-source receiving is separately held.** A qualified GHS census from
+private Bare Cedar Fog can be read by an authenticated source observer without
+being publishable into a public Semioverse Work board. The original native
+`prepareGitHubWork` refuses `private` or `unknown` source visibility and
+requires independently verified public binding/audience before preparing a
+public native Work opening. The new original test exercises both that refusal
+and a hypothetical public-source preparation; successful local receipt-store
+replay is *not* a private-audience grant, a public posting, or an independent
+consumer acceptance. Do not work around the guard by relabeling a private
+repository as public.
 
 This explicit **source-only** mode does not retrieve a global repository
 inventory or unrelated issues, PRs, branches and tags. It checks the selected
