@@ -252,10 +252,19 @@ test('branch and tag source selectors retain distinct GitHub ref identities in n
   });
   const branch = prepare('refs/heads/feat/an#issue');
   const tag = prepare('refs/tags/feat/an#issue');
+  const historical = prepare('refs/archive/2026-10-09/codex/an#issue');
   assert.equal(branch.envelope.source.url,
     'https://api.github.com/repos/house/site/git/refs/heads/feat/an%23issue');
   assert.equal(tag.envelope.source.url,
     'https://api.github.com/repos/house/site/git/refs/tags/feat/an%23issue');
+  assert.equal(historical.envelope.source.url,
+    'https://api.github.com/repos/house/site/git/refs/archive/2026-10-09/codex/an%23issue');
+  assert.equal(historical.envelope.source.objectId,'refs/archive/2026-10-09/codex/an#issue');
+  assert.equal(historical.input.sources[0].kind,'github-git-ref');
+  assert.equal(historical.input.sources[1].kind,'github-source-document');
+  assert.equal(readGitHubSourceDocument(historical.document).source.objectId,
+    'refs/archive/2026-10-09/codex/an#issue');
+  assert.notEqual(historical.input.sources[0].locator, tag.input.sources[0].locator);
   assert.notEqual(branch.input.sources[0].locator, tag.input.sources[0].locator);
   assert.equal(branch.input.sources[0].kind, 'github-git-ref');
   assert.equal(readGitHubSourceDocument(branch.document).source.objectId,
