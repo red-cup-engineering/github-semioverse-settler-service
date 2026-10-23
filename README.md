@@ -465,8 +465,13 @@ registry or receipt database.
 
 ### Fabricate one source-qualified historical Git ref into the existing Work receiver
 
-Custom Git `refs/archive/*` references hold unfinished or unprocessed code;
-they are **not** `refs/tags/archive/*` tags or completed Work receipts. The
+Standard Git tags under `refs/tags/archive/*` and custom Git refs under
+`refs/archive/*` may each retain unprocessed agent code. They are **distinct
+Git reference namespaces**, not completed Work, approved archival disposition,
+or permission to retire a ref. The original GitHub Engineering census already
+supports both; this native Semioverse reader now consumes either without
+renaming, recasting annotated tag objects, or confusing source observations
+with recipient acceptance. The
 original `github-poll` used to read a complete `git/matching-refs/archive`
 namespace *twice* even to receive one selected reference. On a real Git
 Services source cut the complete response contained 15 refs/8,053 bytes,
@@ -486,7 +491,9 @@ GitHub Engineering `github.archive-ref-census/v1` joined to its
 
 - `repositoryFullName` and `repositoryId`: authenticated GitHub identity
   in the original visible repository inventory, never inferred from a path
-- `refName`: full Git name in `refs/archive` or `refs/archive/*`
+- `refName`: full Git name in `refs/tags/archive` or `refs/tags/archive/*`,
+  **or separately** `refs/archive` or `refs/archive/*`; the selected name
+  must belong to the exact namespace declared in the upstream census
 - `objectType` and `objectSha`: exact Git commit/tag/blob/tree target;
   no unpinned historical source may be promoted
 
@@ -496,7 +503,8 @@ its original source-qualified JSON report. Its single `sourceRefAssays[0]`
 is a `github.archive-ref-census/v1` with full Git repository/ref/object
 coordinates, produced under the original Draft 2020-12 contract.
 The original Semioverse settler now **reads that JSON as an actual input**:
-an operator names one or more preserved refs, and the same producer projects
+an operator names one or more preserved archive tags or custom refs from the
+census's declared namespace, and the same producer projects
 the exact `repositoryId`, `repositoryFullName`, `refName`, `objectType`,
 and `objectSha` into the existing typed Git source→Work receiver.
 
@@ -508,6 +516,18 @@ GITHUB_SETTLER_ARCHIVE_SELECTED_REFS='["refs/archive/2026-10-09/codex/github-clo
   node scripts/reconcile-github.mjs
 ```
 
+
+For actual `refs/tags/archive/*` tags, use the **same** upstream
+`github.archive-ref-census/v1` structure with
+`prefix: "refs/tags/archive"`; for example, the original GitHub Engineering
+Bare Cedar Fog census may select
+`refs/tags/archive/codex-kalshi-production-fabrication-20261022` by full
+name. The existing `GITHUB_SETTLER_ARCHIVE_SELECTED_REFS` setting selects
+that exact tag from the matching report, not from a custom-ref census.
+The source remains unreceived until the rightful original Guix consumer and
+Coesite receiving prove useful integration; this bridge only admits a typed
+provider source into native Work.
+
 This explicit **source-only** mode does not retrieve a global repository
 inventory or unrelated issues, PRs, branches and tags. It checks the selected
 repository identity against both the configured owner and authenticated GitHub
@@ -516,7 +536,13 @@ mixed source-only/general-polling requests. The report is an operator-selected
 regular, non-symlink UTF-8 file no larger than 1 MiB; changed or incomplete
 input refuses. An unknown or retargeted ref cannot become received Work.
 One standalone original `refCensus` may be supplied instead of the complete
-report. No additional state store or archive queue is introduced.
+report. Source admission checks the exact original GHS Draft 2020-12 census
+and row shape, prefix, unique ref names, typed object identities, and
+`not-observed` consumer status. A purported `received` or auto-retirement
+field is rejected rather than imported as authority. The selected GitHub
+`git/ref/tags/archive/...` or `git/ref/archive/...` is read twice and matched
+to the exact source object; annotated tags retain the tag-object identity.
+No additional state store or archive queue is introduced.
 
 The original manually pinned five-field JSON input through
 `GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS` remains available for ordinary
