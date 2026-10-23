@@ -1,4 +1,4 @@
-import { normalizeGitHubEvent } from "./settler.mjs";
+import { admitGitHubRefName, normalizeGitHubEvent } from "./settler.mjs";
 
 const required = (value, name) => {
   if (typeof value !== "string" || value.trim() === "") throw new TypeError(name + " is required");
@@ -19,49 +19,78 @@ async function pages({ getJson, path, perPage = 30, maxPages = 100 }) {
   throw new Error("GitHub pagination bound reached: " + path);
 }
 
-/** One exact opted-in Git source cut, not an archive-to-Work claim.
- * GitHub's matching-refs/archive ignores ordinary page= and per_page=
- * parameters (504 refs were returned for both page 1 and 2). Therefore we
- * read its complete <=512-object population twice at the same original URL.
- * Only explicitly selected refs may become provider delta candidates. */
-async function selectedArchiveRefDeltas({getJson,repository,refNames}) {
- if(!Array.isArray(refNames)||refNames.length>8||new Set(refNames).size!==refNames.length
-   ||refNames.some(ref=>typeof ref!=='string'
-     ||!(ref==='refs/archive'||ref.startsWith('refs/archive/'))))
-   throw new TypeError('At most eight distinct exact custom Git archive references required');
- const path='repos/'+repository.full_name+'/git/matching-refs/archive';
- const cut=async()=>{
-  const observed=await getJson(path);
-  if(!Array.isArray(observed)||observed.length>512)
-   throw new RangeError('Complete source Git archive namespace unavailable or over bound');
-  const source=new Map();
-  for(const row of observed){
-   if(typeof row?.ref!=='string'||!row.ref.startsWith('refs/archive'))
-     throw new TypeError('GitHub archive provider returned an unqualified Git ref');
-   // GitHub matching-refs performs a string-prefix match: archived-* belongs
-   // outside the exact refs/archive namespace and is not a lost source.
-   if(row.ref!=='refs/archive'&&!row.ref.startsWith('refs/archive/'))continue;
-   if(source.has(row.ref))throw new Error('Repeated original archive reference identity');
-   const envelope=normalizeGitHubEvent({
-     action:'observed',repository,git_ref:row,
-   });
-   source.set(row.ref,{row,envelope});
-  }
-  return source;
+/** One selected historical Git ref is a SOURCE, never a received Work.
+ * Its upstream identity is the original GHS census's stable repository ID,
+ * original repository name, full ref, exact typed Git target. Do not enumerate
+ * all other refs in a large archive namespace to read this one input: GitHub
+ * has a standard exact-ref resource at /git/ref/archive/... .
+ *
+ * The two exact source cuts and repository-ID rechecks are deliberately
+ * read-only. They establish a bounded current observation, not an exhaustive
+ * ref namespace census, ref-retirement grant or independent Work acceptance. */
+async function selectedArchiveRefDeltas({getJson,repository,sources}) {
+ if(!Array.isArray(sources)||sources.length<1||sources.length>8)
+   throw new TypeError('Select from one to eight exact original archive source records');
+ const selected=new Set();
+ for(const source of sources) {
+   if(!source||typeof source!=='object'||Array.isArray(source)
+     ||Object.keys(source).sort().join(',')!=='objectSha,objectType,refName,repositoryFullName,repositoryId'
+     ||source.repositoryId!==repository.id
+     ||typeof source.repositoryFullName!=='string'
+     ||source.repositoryFullName.toLowerCase()!==repository.full_name.toLowerCase()
+     ||!Number.isSafeInteger(source.repositoryId)||source.repositoryId<1
+     ||!['commit','tag','tree','blob'].includes(source.objectType)
+     ||typeof source.objectSha!=='string'
+     ||!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(source.objectSha))
+     throw new TypeError('Exact original repository ID and typed Git object source required');
+   admitGitHubRefName(source.refName);
+   if(!(source.refName==='refs/archive'||source.refName.startsWith('refs/archive/'))
+     ||selected.has(source.refName))
+     throw new TypeError('Unique original refs/archive source identity required');
+   selected.add(source.refName);
+ }
+ const path='repos/'+repository.full_name;
+ const currentRepository=async()=>{
+   const observed=await getJson(path);
+   if(!observed||observed.id!==repository.id
+     ||typeof observed.full_name!=='string'
+     ||observed.full_name.toLowerCase()!==repository.full_name.toLowerCase()
+     ||typeof observed.default_branch!=='string'||!observed.default_branch
+     ||(repository.default_branch!==undefined
+       &&observed.default_branch!==repository.default_branch))
+     throw new Error('GitHub repository identity changed during selected archive source read');
+   return observed;
  };
- const first=await cut(),second=await cut();
- const identity=refs=>JSON.stringify([...refs.entries()].map(([name,{envelope}])=>[
-   name,envelope.source.revision,envelope.materialIdentity,
-  ]).sort((a,b)=>a[0].localeCompare(b[0])));
- if(identity(first)!==identity(second))
-  throw new Error('Custom Git archive ref source changed during complete observation');
- for(const refName of refNames)
-  if(!first.has(refName))
-   throw new Error('Selected native custom Git ref absent from complete source population');
- return refNames.map(name=>first.get(name).envelope);
+ const before=await currentRepository();
+ const refPath=ref=>'repos/'+repository.full_name+'/git/ref/'
+   +ref.slice('refs/'.length).split('/').map(encodeURIComponent).join('/');
+ const cut=async()=>{
+   const observations=[];
+   for(const source of sources) {
+     const row=await getJson(refPath(source.refName));
+     if(row?.ref!==source.refName
+       ||row.object?.sha!==source.objectSha
+       ||row.object?.type!==source.objectType)
+       throw new Error('Selected exact native Git reference changed from its admitted source object');
+     const envelope=normalizeGitHubEvent({action:'observed',repository,git_ref:row});
+     if(envelope.source.objectId!==source.refName
+       ||envelope.source.revision!==source.objectSha)
+       throw new Error('Provider ref identity differs from exact source selection');
+     observations.push(envelope);
+   }
+   return observations;
+ };
+ const first=await cut(),second=await cut(),after=await currentRepository();
+ if(after.default_branch!==before.default_branch
+   ||before.private!==after.private
+   ||first.length!==second.length
+   ||first.some((item,i)=>item.eventKey!==second[i].eventKey
+     ||item.providerObjectKey!==second[i].providerObjectKey))
+   throw new Error('Selected original Git source or repository state changed during observation');
+ return first;
 }
 
-export async function collectGitHubRepositoryDeltas({ getJson, repository, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefNames = [] } = {}) {
+export async function collectGitHubRepositoryDeltas({ getJson, repository, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSources = [] } = {}) {
   if (!repository || !Number.isInteger(repository.id) || typeof repository.full_name !== "string") {
     throw new TypeError("repository.id and repository.full_name are required");
   }
@@ -86,10 +115,10 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
   // point at a tag object rather than a peeled commit. A missing ref in a later
   // scan cannot independently certify deletion or authorize an effect.
   if (typeof includeRefs !== "boolean") throw new TypeError("includeRefs must be a boolean");
-  if (archiveRefNames !== undefined && (!Array.isArray(archiveRefNames)
-    || archiveRefNames.length>8)) throw new TypeError("bounded selected archive refs must be an array");
-  if (archiveRefNames.length)
-    deltas.push(...await selectedArchiveRefDeltas({getJson,repository,refNames:archiveRefNames}));
+  if (!Array.isArray(archiveRefSources)||archiveRefSources.length>8)
+    throw new TypeError('Bounded selected archive sources must be an array');
+  if (archiveRefSources.length)
+    deltas.push(...await selectedArchiveRefDeltas({getJson,repository,sources:archiveRefSources}));
   if (includeRefs) {
     const seen = new Set();
     for (const family of ["heads", "tags"]) {
@@ -112,27 +141,45 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
 
 export async function collectGitHubRepositories({ getJson, repositories, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSelections = [] } = {}) {
   if (!Array.isArray(repositories) || repositories.length === 0) throw new TypeError("repositories are required");
-  // Exact selections belong to repositories already actually enumerated by
-  // authenticated GitHub. A name guessed from an archive ref grants no scope.
+  // Select only upstream source-qualified objects already bound to the
+  // authenticated repository inventory. An owner/name label alone cannot
+  // select changed historical code; the exact Git target must also match.
   if(!Array.isArray(archiveRefSelections)||archiveRefSelections.length>8)
-    throw new TypeError('At most eight original custom archive source selections required');
-  const available=new Map(repositories.map(repo=>[repo.full_name.toLowerCase(),repo]));
+    throw new TypeError('At most eight original archive source selections required');
+  const available=new Map();
+  for(const repo of repositories){
+    if(typeof repo?.full_name!=='string'||!Number.isSafeInteger(repo.id)||repo.id<1
+      ||available.has(repo.full_name.toLowerCase()))
+      throw new TypeError('Original repository inventory is ambiguous or unqualified');
+    available.set(repo.full_name.toLowerCase(),repo);
+  }
   const byRepository=new Map(),seen=new Set();
   for(const source of archiveRefSelections){
-    if(!source||typeof source!=='object'||Array.isArray(source)
-      ||Object.keys(source).sort().join(',')!=='refName,repository'
-      ||typeof source.repository!=='string'||!available.has(source.repository.toLowerCase())
+    const name=typeof source?.repositoryFullName==='string'
+      ?source.repositoryFullName.toLowerCase():null;
+    const parent=name===null?null:available.get(name);
+    if(!parent||source.repositoryId!==parent.id
+      ||!source||typeof source!=='object'||Array.isArray(source)
+      ||Object.keys(source).sort().join(',')!=='objectSha,objectType,refName,repositoryFullName,repositoryId'
       ||typeof source.refName!=='string'
-      ||!(source.refName==='refs/archive'||source.refName.startsWith('refs/archive/'))
-      ||seen.has(source.repository.toLowerCase()+'@'+source.refName))
-      throw new TypeError('Exact previously enumerated Git repository/ref source selection required');
-    const name=source.repository.toLowerCase();seen.add(name+'@'+source.refName);
-    byRepository.set(name,[...(byRepository.get(name)??[]),source.refName]);
+      ||seen.has(name+'@'+source.refName))
+      throw new TypeError('Exact previously enumerated Git repository/object source selection required');
+    // Check structural admission before any provider call, not after a
+    // resource has been fetched under a possibly misleading source name.
+    if(!['commit','tag','tree','blob'].includes(source.objectType)
+      ||typeof source.objectSha!=='string'
+      ||!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(source.objectSha))
+      throw new TypeError('Selected archive source must declare its typed original Git object');
+    admitGitHubRefName(source.refName);
+    if(!(source.refName==='refs/archive'||source.refName.startsWith('refs/archive/')))
+      throw new TypeError('Selected source belongs to the custom Git archive namespace');
+    seen.add(name+'@'+source.refName);
+    byRepository.set(name,[...(byRepository.get(name)??[]),source]);
   }
   const result = [];
   for (const repository of repositories) {
     result.push(...await collectGitHubRepositoryDeltas({ getJson, repository, state, since, perPage, maxPages, includeRefs,
-      archiveRefNames:byRepository.get(repository.full_name.toLowerCase())??[],
+      archiveRefSources:byRepository.get(repository.full_name.toLowerCase())??[],
     }));
   }
   return result;
