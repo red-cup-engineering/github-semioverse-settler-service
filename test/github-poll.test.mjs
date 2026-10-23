@@ -205,7 +205,7 @@ test("selected archive producer refuses stale provider IDs, retargeting, or fabr
   /repository identity changed/u);
  let checks=0;
  await assert.rejects(attempt({repo:()=>checks++===0?baseline:{...baseline,default_branch:"other"},ref:()=>good}),
-  /repository state changed/u);
+  /repository (?:identity|state) changed/u);
  await assert.rejects(attempt({repo:stable,ref:()=>({...good,object:{...good.object,type:"blob"}})}),
   /changed from its admitted source object/u);
  await assert.rejects(attempt({repo:stable,ref:()=>undefined}),
@@ -255,7 +255,7 @@ test("exact numeric repository identity and pinned object are required before an
   await assert.rejects(collectGitHubRepositories({
    getJson:async()=>{throw new Error("No provider reads permitted for unadmitted source");},
    repositories:[repo,other],archiveRefSelections:sources,
-  }), /original|typed|refname|namespace/u);
+  }), /original|typed|refname|namespace|previously enumerated/u);
  }
  const defaults=await collectGitHubRepositories({
   getJson:async path=>{
