@@ -58,6 +58,7 @@ if (owners.length === 0) throw new Error("GITHUB_SETTLER_OWNERS is required");
 const sourceOnly=process.env.GITHUB_SETTLER_ARCHIVE_CENSUS_FILE!==undefined;
 if(sourceOnly && (process.env.GITHUB_SETTLER_SINCE!==undefined
   ||process.env.GITHUB_SETTLER_INCLUDE_REFS==='1'
+  ||process.env.GITHUB_SETTLER_INCLUDE_DISCUSSION==='1'
   ||(process.env.GITHUB_SETTLER_STATE!==undefined
     &&process.env.GITHUB_SETTLER_STATE!=='open')))
   throw new TypeError('Source-only native Git Work cannot mix issue/PR, branch/tag or time-window polling');
@@ -102,6 +103,10 @@ const deltas = await collectGitHubRepositories({
   state: process.env.GITHUB_SETTLER_STATE ?? "open",
   since: process.env.GITHUB_SETTLER_SINCE,
   includeRefs: process.env.GITHUB_SETTLER_INCLUDE_REFS === "1",
+  // Repository-wide comments: 2 bounded API lists, no per-issue fanout.
+  includeDiscussion: process.env.GITHUB_SETTLER_INCLUDE_DISCUSSION === "1",
+  maxDiscussionPages: process.env.GITHUB_SETTLER_DISCUSSION_MAX_PAGES === undefined
+    ? 10 : Number(process.env.GITHUB_SETTLER_DISCUSSION_MAX_PAGES),
   // Explicit source selection; omitting it preserves the original issue/PR
   // and optional head/tag poll. No ambient refs/archive sweep is implied.
   archiveRefSelections,
