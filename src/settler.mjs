@@ -8,7 +8,20 @@ const REQUIRED = (value, name) => {
 const objectFor = (event) => {
   // Comments and reviews are distinct provider objects even when the webhook
   // includes their parent issue or PR. Selecting the parent loses their identity.
-  if (event.comment) return [event.pull_request ? 'pull_request_review_comment' : 'issue_comment', event.comment];
+  if (event.comment) {
+    // GitHub's repository-wide review-comment REST listing carries its exact
+    // provider review identity and PR URL but not an expanded parent object.
+    // A review comment is NOT an ordinary PR Conversation issue comment.
+    const comment=event.comment;
+    const reviewSource=comment.pull_request_url!==undefined||comment.pull_request_review_id!==undefined;
+    if(reviewSource && (!Number.isSafeInteger(comment.pull_request_review_id)||
+      comment.pull_request_review_id<1||typeof comment.pull_request_url!=='string'||
+      !/^https:\/\/api[.]github[.]com\/repos\/[^/]+\/[^/]+\/pulls\/[1-9][0-9]*$/u.test(comment.pull_request_url)))
+      throw new TypeError('GitHub review comment needs exact provider PR and review identity');
+    if(event.pull_request&&comment.issue_url!==undefined&&!reviewSource)
+      throw new TypeError('GitHub PR review cannot borrow an issue comment identity');
+    return [event.pull_request||reviewSource?'pull_request_review_comment':'issue_comment',comment];
+  }
   if (event.review) return ['review', event.review];
   if (event.pull_request) return ['pull_request', event.pull_request];
   if (event.issue) return ['issue', event.issue];
