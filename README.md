@@ -629,3 +629,24 @@ Actor or hydrated parent. Structured Work admission, review *decisions*,
 project-field updates, host release and an authenticated GitHub-thread
 return receipt remain separate, unreceived capabilities. Neither
 source polling nor a passing Node test proves external customer delivery.
+
+
+### Incremental issue/PR lifecycle, not an open-only snapshot
+
+An **initial** GitHub issue observation without a time boundary retains the original
+`state=open` default to avoid claiming a full historical backfill. An **incremental**
+`GITHUB_SETTLER_SINCE` observation now selects `state=all` unless the operator
+explicitly narrows `GITHUB_SETTLER_STATE`. This is essential: GitHub's default
+open-only list omits an issue closed or a PR merged after a previous scan.
+Those original closure observations do **not** certify independent Work delivery,
+a customer ACK or settlement. Caller-chosen `state=open` or `state=closed`
+with `since` is an intentional **partial provider scope**.
+
+The original GitHub REST issue list carries both issues and PR issue identities;
+the poller still hydrates each selected PR from its exact Pulls endpoint.
+Repeated issue numbers across pages now refuse the source lot rather than
+being projected as two distinct Work events. This is a **negative drift detector**,
+not proof that an asynchronously changing multi-page GitHub listing forms
+an atomic snapshot. An unknown or invalid state refuses before provider reads.
+Exact original source admission, permissions, revision, native receiving and
+receipt truth remain under the existing GitHub→Semioverse settlement path.
