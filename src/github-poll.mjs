@@ -27,6 +27,57 @@ async function pages({ getJson, path, perPage = 30, maxPages = 100 }) {
   throw new Error("GitHub pagination bound reached: " + path);
 }
 
+// Repository-level endpoints cover historical edits without one request per
+// issue or pull request. Comments remain source testimony, never Work moves.
+function discussionRow(row, repository, kind, seen) {
+  if(!row||typeof row!=="object"||Array.isArray(row)||
+    !Number.isSafeInteger(row.id)||row.id<1||
+    typeof row.node_id!=="string"||!row.node_id.trim()||
+    typeof row.body!=="string"||
+    typeof row.created_at!=="string"||typeof row.updated_at!=="string"||
+    !Number.isFinite(Date.parse(row.created_at))||
+    !Number.isFinite(Date.parse(row.updated_at))||
+    Date.parse(row.updated_at)<Date.parse(row.created_at))
+    throw new TypeError("GitHub discussion needs exact provider identity, material and chronology");
+  const api="https://api.github.com/repos/"+repository.full_name+"/";
+  const kindPath=kind==="issue"?"issues/comments/":"pulls/comments/";
+  if(row.url!==api+kindPath+row.id)
+    throw new TypeError("GitHub discussion API identity outside selected repository");
+  const parentPrefix=api+(kind==="issue"?"issues/":"pulls/");
+  const parentLocator=kind==="issue"?row.issue_url:row.pull_request_url;
+  if(typeof parentLocator!=="string"||!parentLocator.startsWith(parentPrefix))
+    throw new TypeError("GitHub discussion parent outside selected repository");
+  const number=parentLocator.slice(parentPrefix.length);
+  if(!/^[1-9][0-9]*$/u.test(number)||!Number.isSafeInteger(Number(number))||
+     (kind==="issue"&&row.pull_request_url!==undefined)||
+     (kind==="review"&&(!Number.isSafeInteger(row.pull_request_review_id)||row.pull_request_review_id<1)))
+    throw new TypeError("GitHub discussion parent kind and provider identity disagree");
+  const publicPrefix="https://github.com/"+repository.full_name+"/";
+  if(typeof row.html_url!=="string"||!row.html_url.startsWith(publicPrefix))
+    throw new TypeError("GitHub discussion source locator outside selected repository");
+  const key=kind+":"+row.id;
+  if(seen.has(key))throw new TypeError("GitHub discussion page duplicates a source identity");
+  seen.add(key);
+  return normalizeGitHubEvent({ action:"observed",repository,comment:row });
+}
+
+/** Opt-in complete bounded discussion source. Two repository-level lists,
+ * not O(number of issues) comment queries. If one list cannot be received,
+ * the entire source lot refuses rather than showing partial collaboration. */
+async function discussionDeltas({getJson,repository,since,perPage,maxDiscussionPages}) {
+  if(!Number.isInteger(maxDiscussionPages)||maxDiscussionPages<1||maxDiscussionPages>20)
+    throw new RangeError("GitHub discussion pages must be bounded to 1–20");
+  const root="repos/"+repository.full_name+"/";
+  const sinceQuery=since===undefined?"":"&since="+encodeURIComponent(required(since,"since"));
+  const seen=new Set(),result=[];
+  for(const [kind,endpoint] of [["issue","issues/comments"],["review","pulls/comments"]]) {
+    const rows=await pages({getJson,path:root+endpoint+"?sort=updated&direction=asc"+sinceQuery,
+      perPage,maxPages:maxDiscussionPages});
+    for(const row of rows)result.push(discussionRow(row,repository,kind,seen));
+  }
+  return result;
+}
+
 /** Project an original GitHub Engineering archive-ref census into exact
  * provider source inputs. The caller explicitly selects 1–8 named refs; a
  * ref census is historical source evidence, NEVER receiving or authority.
@@ -190,7 +241,7 @@ async function completeGitRefFamily({getJson,repository,family,maxRefs=512}) {
  return [...first.values()].sort((a,b)=>a.source.objectId.localeCompare(b.source.objectId));
 }
 
-export async function collectGitHubRepositoryDeltas({ getJson, repository, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSources = [], sourceOnly = false } = {}) {
+export async function collectGitHubRepositoryDeltas({ getJson, repository, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSources = [], sourceOnly = false, includeDiscussion = false, maxDiscussionPages = 10 } = {}) {
   if (!repository || !Number.isInteger(repository.id) || typeof repository.full_name !== "string") {
     throw new TypeError("repository.id and repository.full_name are required");
   }
@@ -198,7 +249,7 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
   // or PR in its repository; unrelated work is a distinct production lot.
   if(typeof sourceOnly!=='boolean'||sourceOnly && (
     !Array.isArray(archiveRefSources)||archiveRefSources.length<1
-    ||includeRefs!==false||since!==undefined||state!=='open'))
+    ||includeRefs!==false||includeDiscussion!==false||since!==undefined||state!=='open'))
     throw new TypeError('Source-only Git receiving requires selected exact refs without general polling');
   const sinceQuery = since === undefined ? "" : "&since=" + encodeURIComponent(required(since, "since"));
   const issues = sourceOnly ? [] : await pages({
@@ -207,6 +258,8 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
     perPage,
     maxPages,
   });
+  if(typeof includeDiscussion!=="boolean")
+    throw new TypeError("GitHub discussion collection must be explicitly selected");
   const deltas = [];
   for (const item of issues) {
     if (item.pull_request) {
@@ -216,6 +269,8 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
       deltas.push(normalizeGitHubEvent({ action: "observed", repository, issue: item }));
     }
   }
+  if(includeDiscussion)
+    deltas.push(...await discussionDeltas({getJson,repository,since,perPage,maxDiscussionPages}));
   // These are *observed current references*, not inferred branch-create/
   // branch-delete events. Retain Git's actual ref target: annotated tags may
   // point at a tag object rather than a peeled commit. A missing ref in a later
@@ -235,7 +290,7 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
   return deltas.sort((left, right) => String(left.source.occurredAt ?? "").localeCompare(String(right.source.occurredAt ?? "")) || left.eventKey.localeCompare(right.eventKey));
 }
 
-export async function collectGitHubRepositories({ getJson, repositories, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSelections = [], sourceOnly = false } = {}) {
+export async function collectGitHubRepositories({ getJson, repositories, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSelections = [], sourceOnly = false, includeDiscussion = false, maxDiscussionPages = 10 } = {}) {
   if (!Array.isArray(repositories) || repositories.length === 0) throw new TypeError("repositories are required");
   // Select only upstream source-qualified objects already bound to the
   // authenticated repository inventory. An owner/name label alone cannot
@@ -243,7 +298,7 @@ export async function collectGitHubRepositories({ getJson, repositories, state =
   if(!Array.isArray(archiveRefSelections)||archiveRefSelections.length>8)
     throw new TypeError('At most eight original archive source selections required');
   if(typeof sourceOnly!=='boolean'||sourceOnly && (
-    archiveRefSelections.length<1||includeRefs!==false
+    archiveRefSelections.length<1||includeRefs!==false||includeDiscussion!==false
     ||since!==undefined||state!=='open'))
     throw new TypeError('Source-only Git receiving requires selected original refs without general polling');
   const available=new Map();
@@ -281,7 +336,7 @@ export async function collectGitHubRepositories({ getJson, repositories, state =
     const selected=byRepository.get(repository.full_name.toLowerCase())??[];
     if(sourceOnly && selected.length===0)continue;
     result.push(...await collectGitHubRepositoryDeltas({ getJson, repository, state, since, perPage, maxPages, includeRefs,
-      archiveRefSources:selected,sourceOnly,
+      archiveRefSources:selected,sourceOnly,includeDiscussion,maxDiscussionPages,
     }));
   }
   return result;
