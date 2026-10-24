@@ -598,3 +598,34 @@ authority, source identity and acceptance conditions before such actions.
 `GITHUB_SETTLER_INCLUDE_REFS` absent or other than `1` leaves ordinary
 issue/PR polling unchanged. Native tests exercise distinct annotated tags,
 head updates, idempotent replay and malformed/duplicate-ref refusals.
+
+## Bounded GitHub collaboration source (candidate)
+
+The original issue/PR poll only observed top-level snapshots; its normalizer
+already understood first-class issue comments and PR review comments when
+delivered as authenticated webhook material. GitHub's source-owned
+[repository issue comments](https://docs.github.com/en/rest/issues/comments)
+and [repository pull-review comments](https://docs.github.com/en/rest/pulls/comments)
+can be queried with provider `since` and complete bounded pagination.
+This opt-in source path corrects a missing conversation-history observation
+without cloning every issue, creating an independent Work board or
+pretending the comments approve a Work transition.
+
+Use `GITHUB_SETTLER_INCLUDE_DISCUSSION=1` on the existing
+`reconcile-github` runner; select `GITHUB_SETTLER_SINCE` for incremental
+polling and `GITHUB_SETTLER_DISCUSSION_MAX_PAGES` (1–20, default 10) to
+cap each of the two independent source collections. If the provider returns
+an incomplete page sequence, wrong-repository comment, missing review
+identity, conflicting duplicate, or unavailable permission, the **entire
+source lot refuses**. Default collection remains issue/PR snapshots only,
+without surprise API cost. Source-only Git archive receiving cannot select
+discussion polling.
+
+A PR *Conversation* comment is an issue comment, whereas an inline diff
+discussion is a PR review comment. Their provider object IDs and original
+parent URLs are preserved in each material-bearing envelope. A repository
+poll has no triggering webhook sender and does **not** manufacture a current
+Actor or hydrated parent. Structured Work admission, review *decisions*,
+project-field updates, host release and an authenticated GitHub-thread
+return receipt remain separate, unreceived capabilities. Neither
+source polling nor a passing Node test proves external customer delivery.
