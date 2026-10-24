@@ -22,7 +22,80 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: source-and-receiving-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  independent-packed-source-receiving:
+    # Distinct proofing channel: exact candidate's archive bytes and the real
+    # dependency-free source ingress. Do not infer full dependency closure.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Select original exact source without persisted credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Select native Node 22.18
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22.18.0'
+      - name: Receive an independent packed original source tree, without dependency installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check src/github-poll.mjs
+          node --check src/settler.mjs
+          node --test test/github-poll.test.mjs test/native-work-receiving.test.mjs test/settler.test.mjs
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP" > "$RUNNER_TEMP/packed.json"
+          archive="$(node -e 'const p=require(process.argv[1]);if(p.length!==1||typeof p[0]?.filename!=="string")process.exit(2);process.stdout.write(p[0].filename)' "$RUNNER_TEMP/packed.json")"
+          mkdir "$RUNNER_TEMP/outside-original-checkout"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/outside-original-checkout"
+          test -f "$RUNNER_TEMP/outside-original-checkout/package/src/github-poll.mjs"
+          test -f "$RUNNER_TEMP/outside-original-checkout/package/src/settler.mjs"
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import {pathToFileURL} from "node:url";
+          import {join} from "node:path";
+          const base=join(process.env.RUNNER_TEMP,"outside-original-checkout/package");
+          const {projectArchiveRefSelectionsFromCensus,collectGitHubRepositories}=
+            await import(pathToFileURL(join(base,"src/github-poll.mjs")).href);
+          const {settleGitHubEnvelope,MemoryReceiptStore}=
+            await import(pathToFileURL(join(base,"src/settler.mjs")).href);
+          const repo={id:1284325652,full_name:"561-group/bare-cedar-fog",default_branch:"main",private:true};
+          const ref="refs/tags/archive/held-actor-work";
+          const objectSha="a".repeat(40);
+          const census={recordKind:"github.archive-ref-census/v1",repositoryId:repo.id,
+            repositoryFullName:repo.full_name,defaultBranch:"main",defaultHeadSha:"b".repeat(40),
+            sourceCoverage:"complete-exact-archive-ref-list-at-two-reads",prefix:"refs/tags/archive",
+            count:1,effectsPerformed:false,refs:[{
+              recordKind:"github.archive-ref-observation/v1",refName:ref,objectSha,objectType:"commit",
+              sourceConsumerReceiving:"not-observed",automaticRefRetirementAllowed:false}]};
+          const selections=projectArchiveRefSelectionsFromCensus(census,[ref]);
+          const sourceCalls=[];
+          const observed=await collectGitHubRepositories({repositories:[repo],sourceOnly:true,
+            archiveRefSelections:selections,getJson:async path=>{
+              sourceCalls.push(path);
+              if(path==="repos/561-group/bare-cedar-fog")return repo;
+              if(path==="repos/561-group/bare-cedar-fog/git/ref/tags/archive/held-actor-work")
+                return {ref,object:{type:"commit",sha:objectSha}};
+              throw Error("unselected source "+path);
+            }});
+          assert.equal(sourceCalls.length,4);
+          assert.equal(observed.length,1);
+          assert.equal(observed[0].source.objectId,ref);
+          const store=new MemoryReceiptStore();let calls=0;
+          const admit=async()=>({receiptId:String(++calls)});
+          assert.equal((await settleGitHubEnvelope({envelope:observed[0],receiptStore:store,admit})).state,"RECEIVED");
+          assert.equal((await settleGitHubEnvelope({envelope:observed[0],receiptStore:store,admit})).state,"DUPLICATE_RECEIVED");
+          assert.equal(calls,1);
+          assert.throws(()=>projectArchiveRefSelectionsFromCensus({
+            ...census,refs:[{...census.refs[0],sourceConsumerReceiving:"received"}]
+          },[ref]),TypeError);
+          console.log("Independent unpacked archive receives original typed Git tag source, correct Work replay, and refuses invented receipt");
+          NODE
+
   source-to-native-work:
     runs-on: ubuntu-latest
     timeout-minutes: 12
