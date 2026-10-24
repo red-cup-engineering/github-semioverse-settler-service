@@ -241,7 +241,7 @@ async function completeGitRefFamily({getJson,repository,family,maxRefs=512}) {
  return [...first.values()].sort((a,b)=>a.source.objectId.localeCompare(b.source.objectId));
 }
 
-export async function collectGitHubRepositoryDeltas({ getJson, repository, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSources = [], sourceOnly = false, includeDiscussion = false, maxDiscussionPages = 10 } = {}) {
+export async function collectGitHubRepositoryDeltas({ getJson, repository, since, state = since === undefined ? "open" : "all", perPage = 30, maxPages = 100, includeRefs = false, archiveRefSources = [], sourceOnly = false, includeDiscussion = false, maxDiscussionPages = 10 } = {}) {
   if (!repository || !Number.isInteger(repository.id) || typeof repository.full_name !== "string") {
     throw new TypeError("repository.id and repository.full_name are required");
   }
@@ -251,6 +251,11 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
     !Array.isArray(archiveRefSources)||archiveRefSources.length<1
     ||includeRefs!==false||includeDiscussion!==false||since!==undefined||state!=='open'))
     throw new TypeError('Source-only Git receiving requires selected exact refs without general polling');
+  // Incremental original Work must retain closing, merging and reopening
+  // observations. GitHub defaults to open-only; never accidentally project
+  // that partial view as a complete changed-Work interval.
+  if (!["open", "closed", "all"].includes(state))
+    throw new TypeError("GitHub Work source state must be open, closed or all");
   const sinceQuery = since === undefined ? "" : "&since=" + encodeURIComponent(required(since, "since"));
   const issues = sourceOnly ? [] : await pages({
     getJson,
@@ -260,8 +265,14 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
   });
   if(typeof includeDiscussion!=="boolean")
     throw new TypeError("GitHub discussion collection must be explicitly selected");
-  const deltas = [];
+  const deltas = [], seenIssueNumbers = new Set();
   for (const item of issues) {
+    // GitHub pages can drift under concurrent activity. Repeated source
+    // identities are evidence of an unstable lot, not two Work arrivals.
+    if (!Number.isSafeInteger(item?.number) || item.number < 1 ||
+        seenIssueNumbers.has(item.number))
+      throw new TypeError("GitHub issue source number absent or repeated across pages");
+    seenIssueNumbers.add(item.number);
     if (item.pull_request) {
       const pull = await getJson("repos/" + repository.full_name + "/pulls/" + encodeURIComponent(String(item.number)));
       deltas.push(normalizeGitHubEvent({ action: "observed", repository, pull_request: pull }));
@@ -290,7 +301,7 @@ export async function collectGitHubRepositoryDeltas({ getJson, repository, state
   return deltas.sort((left, right) => String(left.source.occurredAt ?? "").localeCompare(String(right.source.occurredAt ?? "")) || left.eventKey.localeCompare(right.eventKey));
 }
 
-export async function collectGitHubRepositories({ getJson, repositories, state = "open", since, perPage = 30, maxPages = 100, includeRefs = false, archiveRefSelections = [], sourceOnly = false, includeDiscussion = false, maxDiscussionPages = 10 } = {}) {
+export async function collectGitHubRepositories({ getJson, repositories, since, state = since === undefined ? "open" : "all", perPage = 30, maxPages = 100, includeRefs = false, archiveRefSelections = [], sourceOnly = false, includeDiscussion = false, maxDiscussionPages = 10 } = {}) {
   if (!Array.isArray(repositories) || repositories.length === 0) throw new TypeError("repositories are required");
   // Select only upstream source-qualified objects already bound to the
   // authenticated repository inventory. An owner/name label alone cannot
