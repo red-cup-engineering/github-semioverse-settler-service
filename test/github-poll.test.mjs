@@ -588,3 +588,125 @@ test("typed archive-tag source respects the original native Work audience bounda
  assert.equal(readGitHubSourceDocument(prepared.document).source.objectId,ref);
  assert.equal(prepared.receiver,binding.receiver);
 });
+
+const discussionFixture = (kind, id, updatedAt="2026-10-24T04:20:00Z") => {
+  const repo="red-cup-engineering/x";
+  const endpoint=kind==="issue"?"issues":"pulls";
+  const parent=kind==="issue"?7:8;
+  return {
+    id,node_id:(kind==="issue"?"IC_":"PRRC_")+id,
+    url:"https://api.github.com/repos/"+repo+"/"+endpoint+"/comments/"+id,
+    html_url:"https://github.com/"+repo+"/"+(kind==="issue"?"issues/7#issuecomment-":"pull/8#discussion_r")+id,
+    ...(kind==="issue"
+      ? {issue_url:"https://api.github.com/repos/"+repo+"/issues/7"}
+      : {pull_request_url:"https://api.github.com/repos/"+repo+"/pulls/8",
+         pull_request_review_id:44,path:"src/work.mjs",
+         original_commit_id:"a".repeat(40)}),
+    body:"Review original Work without granting authority.",
+    user:{id:31,login:"evidence-author"},
+    created_at:"2026-10-23T01:00:00Z",updated_at:updatedAt,
+  };
+};
+
+test("repository-level discussion polling preserves issue and diff-comment identities without N+1 reads",async()=>{
+  const repository={id:561,full_name:"red-cup-engineering/x",private:true};
+  const calls=[];
+  const getJson=async path=>{
+    calls.push(path);
+    if(path.startsWith("repos/red-cup-engineering/x/issues?"))return [];
+    if(path.startsWith("repos/red-cup-engineering/x/issues/comments?"))return [discussionFixture("issue",123)];
+    if(path.startsWith("repos/red-cup-engineering/x/pulls/comments?"))return [discussionFixture("review",456)];
+    throw new Error("unbounded or per-issue query: "+path);
+  };
+  const rows=await collectGitHubRepositoryDeltas({
+    getJson,repository,includeDiscussion:true,since:"2026-10-23T00:00:00Z",perPage:10,maxDiscussionPages:2,
+  });
+  assert.equal(rows.length,2);
+  assert.deepEqual(rows.map(row=>row.source.objectType),["issue_comment","pull_request_review_comment"]);
+  assert.deepEqual(rows.map(row=>row.source.objectId),["IC_123","PRRC_456"]);
+  assert.equal(rows[0].source.actor,null,"polling observer does not impersonate author");
+  assert.equal(rows[0].source.author,"evidence-author");
+  assert.equal(rows[0].source.visibility,"private");
+  assert.equal(rows[0].material.issue_url,"https://api.github.com/repos/red-cup-engineering/x/issues/7");
+  assert.equal(rows[1].material.pull_request_review_id,44);
+  assert.equal(rows[1].material.pull_request_url,"https://api.github.com/repos/red-cup-engineering/x/pulls/8");
+  assert.equal(rows[0].source.parent,undefined,"no invented hydrated issue parent");
+  assert.equal(calls.length,3,"one issue listing plus two repository-level discussion collections");
+  assert.ok(calls.every(path=>path.includes("per_page=10&page=1")));
+  assert.ok(calls.filter(path=>path.includes("/comments?"))
+    .every(path=>path.includes("sort=updated&direction=asc&since=2026-10-23T00%3A00%3A00Z")));
+  const store=new MemoryReceiptStore();let admitted=0;
+  const admit=async()=>({receiptId:String(++admitted)});
+  for(const row of rows){
+    assert.equal((await settleGitHubEnvelope({envelope:row,receiptStore:store,admit})).state,"RECEIVED");
+    assert.equal((await settleGitHubEnvelope({envelope:row,receiptStore:store,admit})).state,"DUPLICATE_RECEIVED");
+  }
+  assert.equal(admitted,2,"both provider comments admitted exactly once");
+});
+
+test("different edits of the same discussion source are distinct; ordinary polling remains lean",async()=>{
+ const repository={id:561,full_name:"red-cup-engineering/x"};
+ const same=discussionFixture("issue",123),later={...same,body:"materially revised Work evidence"};
+ const produce=async row=>collectGitHubRepositoryDeltas({repository,includeDiscussion:true,
+   getJson:async path=>path.includes("/issues/comments?")?[row]:[],
+ });
+ const a=(await produce(same))[0],b=(await produce(later))[0];
+ assert.equal(a.providerObjectKey,b.providerObjectKey);
+ assert.notEqual(a.eventKey,b.eventKey,"same timestamp must not erase material edits");
+ const ordinary=await collectGitHubRepositoryDeltas({repository,
+  getJson:async path=>{if(path.includes("/issues?"))return [];throw Error("unexpected discussion read");}});
+ assert.deepEqual(ordinary,[]);
+});
+
+test("discussion selection is atomic: refuse changed owners, lost provider fields and incomplete source pages",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x"};
+ const baseline=discussionFixture("issue",123),review=discussionFixture("review",456);
+ const collect=(issueRows,reviewRows,options={})=>collectGitHubRepositoryDeltas({
+  repository:repo,includeDiscussion:true,
+  getJson:async path=>path.includes("/issues/comments?")?issueRows:
+    path.includes("/pulls/comments?")?reviewRows:[],
+  ...options,
+ });
+ await assert.rejects(collect([{...baseline,issue_url:"https://api.github.com/repos/foreign/x/issues/7"}],[review]),/outside selected repository/u);
+ await assert.rejects(collect([baseline,baseline],[review]),/duplicates a source identity/u);
+ await assert.rejects(collect([baseline],[{...review,pull_request_review_id:null}]),/parent kind/u);
+ await assert.rejects(collect([baseline],[{...review,url:"https://api.github.com/repos/foreign/x/pulls/comments/456"}]),/API identity/u);
+ await assert.rejects(collect([{...baseline,updated_at:"2026-01-01T00:00:00Z"}],[review]),/chronology/u);
+ await assert.rejects(collect([baseline],[review],{perPage:1,maxDiscussionPages:1}),/pagination bound/u);
+ await assert.rejects(collect([baseline],[review],{maxDiscussionPages:21}),/bounded to 1/u);
+ await assert.rejects(collect([baseline],[review],{includeDiscussion:"yes"}),/explicitly selected/u);
+ let calls=0;
+ await assert.rejects(collect([baseline],[review],{
+   getJson:async path=>{calls+=1;
+     if(path.includes("/pulls/comments?"))throw Error("provider denied review visibility");
+     return path.includes("/issues/comments?")?[baseline]:[];},
+ }),/provider denied review visibility/u);
+ assert.equal(calls,3,"no partial discussion result escapes on second-source failure");
+});
+
+test("source-only archive-ref observing refuses accidental discussion expansion before provider access",async()=>{
+ let requested=0;
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  repository:{id:561,full_name:"red-cup-engineering/x"},
+  getJson:async()=>{requested+=1;return [];},
+  sourceOnly:true,includeDiscussion:true,
+  archiveRefSources:[{refName:"refs/archive/a",repositoryId:561,repositoryFullName:"red-cup-engineering/x",
+   objectType:"commit",objectSha:"a".repeat(40)}],
+ }),/Source-only/u);
+ assert.equal(requested,0);
+});
+
+test("discussion source selection propagates to multiple original repositories without cross-owner aliasing",async()=>{
+ const a={id:561,full_name:"red-cup-engineering/x"};
+ const b={id:562,full_name:"red-cup-engineering/y"};
+ const row=discussionFixture("issue",123);
+ const calls=[];
+ const getJson=async path=>{calls.push(path);
+  if(path.includes("/issues/comments?"))return path.startsWith("repos/red-cup-engineering/x/")?[row]:[];
+  return [];
+ };
+ const rows=await collectGitHubRepositories({getJson,repositories:[a,b],includeDiscussion:true,maxDiscussionPages:2});
+ assert.equal(rows.length,1);
+ assert.equal(rows[0].source.repositoryId,561);
+ assert.equal(calls.filter(path=>path.includes("/comments?")).length,4);
+});
