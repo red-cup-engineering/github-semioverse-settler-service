@@ -437,3 +437,164 @@ The repository projects the original Computer Operations0.1.2 issue/PR form
 family, including ANT (Autonomous National Territory), Sovereign Service
 Enterprise, and native Message/Work receiving continuity. These fields retain
 source testimony and return addresses; the native receiver verifies authority.
+
+
+## First-class Git branch and tag observations
+
+Set `GITHUB_SETTLER_INCLUDE_REFS=1` when running the original
+`reconcile-github` executable to add authenticated, fully paginated
+`refs/heads/*` and `refs/tags/*` observations to the existing issue/PR
+delta stream. This is opt-in because repository-wide ref enumeration has
+additional provider cost. The selected GitHub `git/matching-refs` responses
+retain the **complete refname**, stable numeric repository ID, exact SHA-1
+(or SHA-256) *object target* and its type: an annotated tag pointing at a
+tag object is not falsely reported as a commit. The normalizer gives each
+`git_ref` a stable `providerObjectKey` based on repository ID and refname;
+moving the ref changes the material-bound event identity. Each branch/tag
+now also projects its own qualified GitHub REST ref locator
+(`https://api.github.com/repos/OWNER/REPO/git/refs/heads/NAME` or `tags/NAME`),
+not the shared repository homepage. That locator is a current provider-read
+address, never proof that an earlier ref target is still present: the exact
+observed refname, target type/SHA, GitHub numeric repository identity and
+material commitment remain in the immutable source document. The original
+native Work source reader permits this ref-specific API locator only when
+it matches the derived provider coordinates; existing browser issue/PR
+locators and public-audience/authority guards are unchanged. Existing durable
+settlement/readback and authorization policy are reused, with no new Work
+registry or receipt database.
+
+### Fabricate one source-qualified historical Git ref into the existing Work receiver
+
+Standard Git tags under `refs/tags/archive/*` and custom Git refs under
+`refs/archive/*` may each retain unprocessed agent code. They are **distinct
+Git reference namespaces**, not completed Work, approved archival disposition,
+or permission to retire a ref. The original GitHub Engineering census already
+supports both; this native Semioverse reader now consumes either without
+renaming, recasting annotated tag objects, or confusing source observations
+with recipient acceptance. The
+original `github-poll` used to read a complete `git/matching-refs/archive`
+namespace *twice* even to receive one selected reference. On a real Git
+Services source cut the complete response contained 15 refs/8,053 bytes,
+versus one exact `git/ref/archive/...` response of 531 bytes; Bare Cedar
+Fog has previously exposed 504 custom refs. GitHub also ignored conventional
+`page=1`/`page=2` pagination for that namespace. Repeating large reads
+does not increase receiving quality or capacity.
+
+The original producer now uses **standard GitHub REST exact-reference
+coordinates**. It selects 1–8 original, fully qualified Git source objects,
+fetches *only* those refs twice plus repository identity before and after,
+and retains the exact GitHub target bytes in the existing
+`semioverse.github-delta.v1` and native Work evidence. Each selected source
+is a strict closed record with the same descriptive fields as the upstream
+GitHub Engineering `github.archive-ref-census/v1` joined to its
+`github.archive-ref-observation/v1` entry:
+
+- `repositoryFullName` and `repositoryId`: authenticated GitHub identity
+  in the original visible repository inventory, never inferred from a path
+- `refName`: full Git name in `refs/tags/archive` or `refs/tags/archive/*`,
+  **or separately** `refs/archive` or `refs/archive/*`; the selected name
+  must belong to the exact namespace declared in the upstream census
+- `objectType` and `objectSha`: exact Git commit/tag/blob/tree target;
+  no unpinned historical source may be promoted
+
+**Preferred producer-to-consumer route.** The existing GitHub Engineering
+`reconcile-github-estate --assess-archive-sources` reader first emits
+its original source-qualified JSON report. Its single `sourceRefAssays[0]`
+is a `github.archive-ref-census/v1` with full Git repository/ref/object
+coordinates, produced under the original Draft 2020-12 contract.
+The original Semioverse settler now **reads that JSON as an actual input**:
+an operator names one or more preserved archive tags or custom refs from the
+census's declared namespace, and the same producer projects
+the exact `repositoryId`, `repositoryFullName`, `refName`, `objectType`,
+and `objectSha` into the existing typed Git source→Work receiver.
+
+```sh
+# Select an actual report previously produced by GitHub Engineering.
+GITHUB_SETTLER_OWNERS=red-cup-engineering \
+GITHUB_SETTLER_ARCHIVE_CENSUS_FILE=/path/to/existing-ghs-report.json \
+GITHUB_SETTLER_ARCHIVE_SELECTED_REFS='["refs/archive/2026-10-09/codex/github-closed-work-observation"]' \
+  node scripts/reconcile-github.mjs
+```
+
+
+For actual `refs/tags/archive/*` tags, use the **same** upstream
+`github.archive-ref-census/v1` structure with
+`prefix: "refs/tags/archive"`; for example, the original GitHub Engineering
+Bare Cedar Fog census may select
+`refs/tags/archive/codex-kalshi-production-fabrication-20261022` by full
+name. The existing `GITHUB_SETTLER_ARCHIVE_SELECTED_REFS` setting selects
+that exact tag from the matching report, not from a custom-ref census.
+The source remains unreceived until the rightful original Guix consumer and
+Coesite receiving prove useful integration; this bridge only admits a typed
+provider source into its bounded Git source/transport workflow.
+
+**Private-source receiving is separately held.** A qualified GHS census from
+private Bare Cedar Fog can be read by an authenticated source observer without
+being publishable into a public Semioverse Work board. The original native
+`prepareGitHubWork` refuses `private` or `unknown` source visibility and
+requires independently verified public binding/audience before preparing a
+public native Work opening. The new original test exercises both that refusal
+and a hypothetical public-source preparation; successful local receipt-store
+replay is *not* a private-audience grant, a public posting, or an independent
+consumer acceptance. Do not work around the guard by relabeling a private
+repository as public.
+
+This explicit **source-only** mode does not retrieve a global repository
+inventory or unrelated issues, PRs, branches and tags. It checks the selected
+repository identity against both the configured owner and authenticated GitHub
+provider, then reads only the exact selected Git refs twice. It also refuses
+mixed source-only/general-polling requests. The report is an operator-selected
+regular, non-symlink UTF-8 file no larger than 1 MiB; changed or incomplete
+input refuses. An unknown or retargeted ref cannot become received Work.
+One standalone original `refCensus` may be supplied instead of the complete
+report. Source admission checks the exact original GHS Draft 2020-12 census
+and row shape, prefix, unique ref names, typed object identities, and
+`not-observed` consumer status. A purported `received` or auto-retirement
+field is rejected rather than imported as authority. The selected GitHub
+`git/ref/tags/archive/...` or `git/ref/archive/...` is read twice and matched
+to the exact source object; annotated tags retain the tag-object identity.
+No additional state store or archive queue is introduced.
+
+The original manually pinned five-field JSON input through
+`GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS` remains available for ordinary
+reconciliation. This example is source selection, not proof of installed
+Semioverse Work receiving or an authority to retire historical code.
+A different repository or ref requires its own authentic source acquisition.
+```sh
+GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS='[{"repositoryFullName":"red-cup-engineering/git-services-section","repositoryId":1325533741,"refName":"refs/archive/2026-10-09/codex/github-closed-work-observation","objectType":"commit","objectSha":"e01987924f9170146b39b0e917210792ff8da9ee"}]' \
+  node scripts/reconcile-github.mjs
+```
+
+The producer refuses old name-only selections, unknown input fields,
+stale or differing numeric repository identities, Git target retargeting,
+missing original ref, invalid refnames, and changed provider material
+between reads. Its reading is **selected-ref-only**, not a complete Git ref
+namespace census or authority to delete a branch. Unlike a namespace census,
+a repository containing 513 or more historical refs does not bar selecting
+one exact, known original object.
+
+With no selection, ordinary issues/PRs and optional
+`GITHUB_SETTLER_INCLUDE_REFS=1` branch/tag polling behave as before.
+No separate queue, ticket board, release registry, archive database,
+published package or independent receiving authority is created. The
+original replay/durable claim path receives the typed Git source event once,
+and subsequent identical observations converge on its existing receipt.
+
+The original
+[GitHub Engineering selected-source reader](https://github.com/red-cup-engineering/github-engineering-services-section/pull/113)
+owns historical commit/tree differences and source-to-writer/schema/consumer
+Work gestures. The original [Coesite receiving method](https://github.com/coesite-operations/operations-services-section/blob/main/lib/agency/skills/receive-repository-integration/SKILL.md)
+independently judges actual Work and consumer acceptance. The
+`github-git-ref` source locator points at an observable GitHub resource,
+not a completed code fabrication, package publication, machine installation,
+approved content review or economic settlement.
+
+These are **snapshots of currently observed refs**. Their lack of a GitHub
+change timestamp is preserved; a later missing ref is not automatically
+a deletion receipt. Polling does not decide to merge, close a PR, delete an
+archive tag, rename/transfer a repository, or adopt a standard. Use the
+original Work receiving path with an independently verified account, scope,
+authority, source identity and acceptance conditions before such actions.
+`GITHUB_SETTLER_INCLUDE_REFS` absent or other than `1` leaves ordinary
+issue/PR polling unchanged. Native tests exercise distinct annotated tags,
+head updates, idempotent replay and malformed/duplicate-ref refusals.

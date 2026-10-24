@@ -9,7 +9,7 @@
     "url": "git+https://github.com/red-cup-engineering/github-semioverse-settler-service.git"
   },
   "scripts": {
-    "check": "node --check src/settler.mjs && node --check src/file-receipt-store.mjs && node --check src/metroplat-http-admit.mjs && node --check src/metroplat-actor-delivery.mjs && node --check src/transport-selection.mjs && node --check src/native-work-receiving.mjs && node --check src/reconcile.mjs && node --check src/github-poll.mjs && node --check scripts/settle-github-event.mjs && node --check scripts/observe-github.mjs && node --check test/settler.test.mjs && node --check test/runtime-edge.test.mjs && node --check test/actor-transport.test.mjs && node --check test/reconcile.test.mjs && node --check test/github-poll.test.mjs",
+    "check": "node --check src/settler.mjs && node --check src/file-receipt-store.mjs && node --check src/metroplat-http-admit.mjs && node --check src/metroplat-actor-delivery.mjs && node --check src/transport-selection.mjs && node --check src/native-work-receiving.mjs && node --check src/reconcile.mjs && node --check src/github-poll.mjs && node --check scripts/settle-github-event.mjs && node --check scripts/observe-github.mjs && node --check scripts/reconcile-github.mjs && node --check test/native-work-receiving.test.mjs && node --check test/settler.test.mjs && node --check test/runtime-edge.test.mjs && node --check test/actor-transport.test.mjs && node --check test/reconcile.test.mjs && node --check test/github-poll.test.mjs",
     "test": "node --test test/*.test.mjs",
     "verify": "npm run check && npm test"
   },
