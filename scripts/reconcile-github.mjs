@@ -100,7 +100,11 @@ if(sourceOnly){
 const deltas = await collectGitHubRepositories({
   getJson: api,
   repositories,
-  state: process.env.GITHUB_SETTLER_STATE ?? "open",
+  // Since is an incremental Work-lifecycle cursor; open-only would silently
+  // omit closed/merged transitions. Explicit narrower state remains a
+  // documented, caller-selected partial view, never an automatic default.
+  state: process.env.GITHUB_SETTLER_STATE ??
+    (process.env.GITHUB_SETTLER_SINCE === undefined ? "open" : "all"),
   since: process.env.GITHUB_SETTLER_SINCE,
   includeRefs: process.env.GITHUB_SETTLER_INCLUDE_REFS === "1",
   // Repository-wide comments: 2 bounded API lists, no per-issue fanout.
