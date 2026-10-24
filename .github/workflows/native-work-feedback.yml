@@ -2,6 +2,9 @@ name: Native GitHub signal to Work feedback
 on:
   pull_request:
     paths:
+      - 'package.json'
+      - 'test/**'
+      - 'src/**'
       - 'src/native-work-receiving.mjs'
       - 'src/settler.mjs'
       - 'src/github-poll.mjs'
@@ -10,6 +13,10 @@ on:
       - 'test/native-work-receiving.test.mjs'
       - 'test/settler.test.mjs'
       - '.github/workflows/native-work-feedback.yml'
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +25,7 @@ permissions:
 jobs:
   source-to-native-work:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -37,3 +44,63 @@ jobs:
           node --check test/native-work-receiving.test.mjs
       - name: Execute original native Work signal, replay and receiving tests
         run: node --test test/github-poll.test.mjs test/native-work-receiving.test.mjs test/settler.test.mjs
+      - name: Qualify original complete source and dependency-backed native tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund --no-package-lock --registry=https://registry.561.group/
+          npm run verify
+      - name: Receive the actual packed source in a clean independent repository consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP" > "$RUNNER_TEMP/github-settler-pack.json"
+          archive="$(node -e 'const p=require(process.argv[1]);if(p.length!==1||typeof p[0]?.filename!=="string")process.exit(2);process.stdout.write(p[0].filename)' "$RUNNER_TEMP/github-settler-pack.json")"
+          tar -tzf "$RUNNER_TEMP/$archive" > "$RUNNER_TEMP/github-settler-members.txt"
+          for name in package/src/github-poll.mjs package/src/settler.mjs package/src/native-work-receiving.mjs package/package.json; do
+            grep -Fx "$name" "$RUNNER_TEMP/github-settler-members.txt"
+          done
+          mkdir -p "$RUNNER_TEMP/receiving-consumer"
+          cd "$RUNNER_TEMP/receiving-consumer"
+          npm init -y >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund --no-package-lock --registry=https://registry.561.group/ "$RUNNER_TEMP/$archive"
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import {projectArchiveRefSelectionsFromCensus,collectGitHubRepositories} from "@red-cup-engineering/github-semioverse-settler-service/github-poll";
+          import {MemoryReceiptStore,settleGitHubEnvelope} from "@red-cup-engineering/github-semioverse-settler-service";
+          const repo={id:1284325652,full_name:"561-group/bare-cedar-fog",default_branch:"main",private:true};
+          const refName="refs/tags/archive/preserved-unprocessed-work";
+          const sha="a".repeat(40);
+          const census={recordKind:"github.archive-ref-census/v1",
+            repositoryId:repo.id,repositoryFullName:repo.full_name,defaultBranch:"main",
+            defaultHeadSha:"b".repeat(40),sourceCoverage:"complete-exact-archive-ref-list-at-two-reads",
+            prefix:"refs/tags/archive",count:1,effectsPerformed:false,
+            refs:[{recordKind:"github.archive-ref-observation/v1",refName,objectSha:sha,
+              objectType:"commit",sourceConsumerReceiving:"not-observed",automaticRefRetirementAllowed:false}]};
+          const sources=projectArchiveRefSelectionsFromCensus(census,[refName]);
+          assert.deepEqual(sources.map(x=>x.refName),[refName]);
+          assert.throws(()=>projectArchiveRefSelectionsFromCensus({...census,refs:[{
+            ...census.refs[0],sourceConsumerReceiving:"received"
+          }]},[refName]),TypeError);
+          const provider=[];
+          const observed=await collectGitHubRepositories({repositories:[repo],
+            archiveRefSelections:sources,sourceOnly:true,
+            getJson:async path=>{
+              provider.push(path);
+              if(path==="repos/561-group/bare-cedar-fog")return {...repo};
+              if(path==="repos/561-group/bare-cedar-fog/git/ref/tags/archive/preserved-unprocessed-work")
+                return {ref:refName,object:{type:"commit",sha}};
+              throw new Error("unrelated or unqualified GitHub provider request "+path);
+            }});
+          assert.equal(observed.length,1);
+          assert.equal(observed[0].source.objectId,refName);
+          assert.equal(observed[0].source.revision,sha);
+          assert.equal(provider.length,4,"exact original source double read and stable repository identity");
+          assert.equal(provider.some(path=>path.includes("matching-refs")||path.includes("issues?")||path.includes("pulls?")),false);
+          const store=new MemoryReceiptStore();let received=0;
+          const admit=async()=>({receiptId:"test-native-"+(++received)});
+          assert.equal((await settleGitHubEnvelope({envelope:observed[0],receiptStore:store,admit})).state,"RECEIVED");
+          assert.equal((await settleGitHubEnvelope({envelope:observed[0],receiptStore:store,admit})).state,"DUPLICATE_RECEIVED");
+          assert.equal(received,1,"exact replay cannot inflate the original consumer Work");
+          console.log("Original packed source independently received exact tagged Git ref and idempotent mocked Work");
+          NODE
