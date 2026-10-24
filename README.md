@@ -7,7 +7,7 @@
 [![Tips welcome](https://img.shields.io/badge/tips-welcome-d4a017)](https://github.com/561-group/.github/blob/main/TIPS.md)
 <!-- 561-group-standards:badges:end -->
 
-Deterministic GitHub→MetroPlat receiving core for `red-cup-engineering/git-services-section#1`.
+Deterministic GitHub→MetroPlat receiving core for `red-cup-engineering/git-engineering-services-section#1`.
 
 This package keeps GitHub provider identity distinct from organizational truth. It normalizes selected material GitHub deltas into typed envelopes, preserves repository ID plus observed owner/name, binds exact provider revision, extracts machine-addressable WorkUnit fields when present, and provides replay-safe settlement through a durable receipt store.
 
@@ -122,7 +122,7 @@ Work Arena/Coesite/Group receiver independently qualifies the principal,
 jurisdiction, office duty, authority, original obligation and receiving
 condition. It cannot appoint an agent or admit a contract. This reflects
 [L-Space's current SAS](https://github.com/lenticule-science/linguistics-services-section/blob/main/specifications/l-space-semantic-architecture.md)
-and [Red Cup's existing HLD/LLD](https://github.com/red-cup-engineering/capability-cell-fabrication-services-section/blob/main/specifications/l-space-lld.md),
+and [Red Cup's existing HLD/LLD](https://github.com/red-cup-engineering/capability-cell-fabrication-engineering-services-section/blob/main/specifications/l-space-lld.md),
 which distinguish attributed words, illocutionary force, formal evidence and
 received institutional effects. `test/settler.test.mjs` now includes the
 corresponding positive, contradiction and quotation/refusal cases.
