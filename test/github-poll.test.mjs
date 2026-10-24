@@ -710,3 +710,75 @@ test("discussion source selection propagates to multiple original repositories w
  assert.equal(rows[0].source.repositoryId,561);
  assert.equal(calls.filter(path=>path.includes("/comments?")).length,4);
 });
+
+test("incremental GitHub Work reads closed issues and merged PRs by default, not just open work",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x",private:true};
+ const since="2026-10-23T00:00:00Z",calls=[];
+ const issue={number:3,id:103,node_id:"I_closed_3",state:"closed",closed_at:"2026-10-23T10:00:00Z",
+   updated_at:"2026-10-23T10:00:00Z",html_url:"https://github.com/red-cup-engineering/x/issues/3",
+   user:{id:31,login:"author"}};
+ const pr={number:4,id:104,node_id:"I_merged_4",pull_request:{},state:"closed",
+   updated_at:"2026-10-23T11:00:00Z",html_url:"https://github.com/red-cup-engineering/x/pull/4",
+   user:{id:31,login:"author"}};
+ const getJson=async path=>{
+   calls.push(path);
+   if(path.includes("/issues?state=all&since="))return [issue,pr];
+   if(path.endsWith("/pulls/4"))return {number:4,node_id:"PR_merged_4",state:"closed",merged:true,
+     merged_at:"2026-10-23T11:00:00Z",head:{sha:"a".repeat(40)},
+     updated_at:"2026-10-23T11:00:00Z",html_url:"https://github.com/red-cup-engineering/x/pull/4",
+     user:{id:31,login:"author"}};
+   throw new Error("incorrect full-lifecycle selector "+path);
+ };
+ const rows=await collectGitHubRepositoryDeltas({getJson,repository:repo,since,perPage:10});
+ assert.equal(rows.length,2);
+ assert.deepEqual(rows.map(x=>x.source.objectType),["issue","pull_request"]);
+ assert.equal(rows[0].material.state,"closed");
+ assert.equal(rows[1].material.merged,true);
+ assert.ok(calls[0].includes("state=all&since="),"closure-inclusive provider query is actually used");
+ assert.equal(rows[1].source.revision,"a".repeat(40));
+ // This is source testimony, never a customer ACK or independently merged Git commit proof.
+});
+
+test("explicit open-only GitHub Work selection remains a deliberately partial source view",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x"};
+ const calls=[];
+ const getJson=async path=>{calls.push(path);return [];};
+ const rows=await collectGitHubRepositoryDeltas({
+  getJson,repository:repo,state:"open",since:"2026-10-23T00:00:00Z",perPage:10,
+ });
+ assert.deepEqual(rows,[]);
+ assert.match(calls[0],/issues\?state=open&since=/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson,repository:repo,state:"pending",perPage:10,
+ }),/GitHub Work source state/u);
+ assert.equal(calls.length,1,"invalid state refuses before the next provider call");
+});
+
+test("repeated issue or PR identities across changing GitHub pages refuse the whole Work source lot",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x"};
+ const a={number:11,id:111,node_id:"I11",html_url:"https://github.com/red-cup-engineering/x/issues/11",
+   user:{id:31,login:"author"},updated_at:"2026-10-23T01:00:00Z"};
+ const b={number:12,id:112,node_id:"I12",html_url:"https://github.com/red-cup-engineering/x/issues/12",
+   user:{id:31,login:"author"},updated_at:"2026-10-23T01:00:00Z"};
+ const requests=[];
+ const getJson=async path=>{
+  requests.push(path);
+  return path.endsWith("page=1")?[a,b]:[b];
+ };
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson,repository:repo,perPage:2,maxPages:3
+ }),/repeated across pages/u);
+ assert.equal(requests.length,2,"a changing paginated lot must not be treated as complete evidence");
+});
+
+test("multi-repository incremental query inherits closure-inclusive selection",async()=>{
+ const repositories=[{id:561,full_name:"red-cup-engineering/x"},{id:562,full_name:"561-group/y"}];
+ const observed=[];
+ const getJson=async path=>{observed.push(path);return [];};
+ const rows=await collectGitHubRepositories({
+  getJson,repositories,since:"2026-10-23T00:00:00Z",perPage:10,
+ });
+ assert.deepEqual(rows,[]);
+ assert.equal(observed.length,2);
+ assert.ok(observed.every(path=>path.includes("issues?state=all&since=")));
+});
