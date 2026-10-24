@@ -39,10 +39,10 @@
     "src"
   ],
   "dependencies": {
-    "@red-cup-engineering/activitypub-engineering-services-section": "0.8.4"
+    "@red-cup-engineering/activitypub-services-section": "0.8.4"
   },
   "devDependencies": {
-    "@red-cup-engineering/git-engineering-services-section": "0.1.7"
+    "@red-cup-engineering/git-services-section": "0.1.7"
   },
   "license": "MIT",
   "funding": {
