@@ -342,6 +342,20 @@ not match the selected receiver. Receipt stages distinguish native admission,
 routing, allocation, implementation and acceptance. Receiving alone proves
 neither staffing nor customer acceptance.
 
+For observation without any Work effect, use
+`readGitHubWork({ event, opening, binding, call })`, or
+`readPreparedGitHubWork({ prepared, call })` after `prepareGitHubWork`. These
+operations invoke only `work-board`. They use the same complete source selection,
+exact replay law and fresh retained-document and interpretation readback as receiving, returning
+the same receipt, source Cells and WorkCells for an existing exact original Work.
+If no exact original is observed, they return `NATIVE_NOT_RECEIVED` with reason
+`no-exact-original-work`, offered source identities and source Cells, with no
+`thread`, `nativeWork`, `workCells` or receipt `stages`. This is an observation
+bounded to that complete source selection, not a rejection, a negative admission
+Cell, or permission to open or dispatch Work. Incomplete, moving, ambiguous or
+corrupt source selection refuses. See the
+[read-only Work contract](specifications/github-work-reading.md).
+
 Replay comparison verifies the recorded source document and compares its full
 observation and supplied native interpretation fields, ignoring only JSON object-key order and
 the transport-only delivery ID. Material, original author, triggering actor,

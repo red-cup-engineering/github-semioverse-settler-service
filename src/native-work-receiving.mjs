@@ -73,10 +73,14 @@ function reportEvidenceDocuments(thread) {
   return [...(thread.corroborations ?? []), ...(thread.restatements ?? [])].flatMap(entry =>
     (entry.evidence ?? []).map(evidenceDocument).filter(Boolean).map(value=>({entry,...value})));
 }
+function reportInterpretationEqual(opening, input) {
+  const fixed = [...new Set([...Object.keys(input), ...Object.keys(opening)])]
+    .filter(key => !['as','sources','evidence','observation','by','at','id','hand','edition','decidedBy'].includes(key));
+  return fixed.every(key => openingFieldEqual(key, opening[key], input[key]));
+}
 function retainedReportReplay(thread, input, offered) {
   if (input.move !== 'report' || thread?.opening?.move !== 'report') return undefined;
-  const fixed = Object.entries(input).filter(([key]) => !['as','sources','evidence','observation'].includes(key));
-  if (!fixed.every(([key,value]) => openingFieldEqual(key,thread.opening[key],value))) return undefined;
+  if (!reportInterpretationEqual(thread.opening, input)) return undefined;
   for (const candidate of reportEvidenceDocuments(thread)) {
     if (!equal(observationForReplay(candidate.envelope), observationForReplay(offered))) continue;
     const offeredLocator = input.sources.find(source => source.kind === 'github-source-document')?.locator;
@@ -162,16 +166,18 @@ export async function readGitHubSourceThreads(call, source) {
   }
 }
 
-/** The effectful part has no filesystem, credentials, receipt map or provider SDK.
- * It can run in the same authenticated client that supplied the source binding. */
-export async function receivePreparedGitHubWork({ prepared, call }) {
+// Both readers and receivers select the same original Work under one replay law.
+// Snapshot the offered source and interpretation before asynchronous board reads.
+async function selectPreparedGitHubWork(prepared, call) {
   if (typeof call !== 'function') throw new TypeError('authenticated native operation port is required');
-  const { envelope, document, input, receiver } = prepared;
+  const document = Object.freeze({ ...prepared.document });
+  const input = structuredClone(prepared.input);
+  const receiver = prepared.receiver;
   // Compare the immutable offered snapshot, not nested objects a caller might
   // have mutated after prepareGitHubWork captured the source document.
-  const offeredObservation = readGitHubSourceDocument(document);
+  const envelope = readGitHubSourceDocument(document);
   // Admit the recoverable Cell representation before an opening can occur.
-  projectGitHubCells(offeredObservation);
+  const sourceCells = projectGitHubCells(envelope);
   let known;
   let retainedDocument = document;
   let evidenceCarriers = retainedGitHubEvidence(input.evidence ?? [], input.evidence ?? []) ?? [];
@@ -179,12 +185,11 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
     if (input.move === 'report' && item.opening?.move === 'report' &&
         typeof input.law === 'string' && typeof input.subject === 'string' &&
         item.opening.law === input.law && item.opening.subject === input.subject) {
-      const fixed = [...new Set([...Object.keys(input),...Object.keys(item.opening)])].filter(key=>!['as','sources','evidence','observation','by','at','id','hand','edition','decidedBy'].includes(key));
-      if (!fixed.every(key => openingFieldEqual(key,item.opening[key],input[key])))
+      if (!reportInterpretationEqual(item.opening, input))
         throw new Error('existing report cannot retain changed interpretation fields; no corroboration attempted');
     }
 
-    const replayDocument = retainedReplayDocument(item.opening, input, offeredObservation) ?? retainedReportReplay(item, input, offeredObservation);
+    const replayDocument = retainedReplayDocument(item.opening, input, envelope) ?? retainedReportReplay(item, input, envelope);
     if (replayDocument) {
       // Two distinct accepted openings asserting exact replay are a source
       // divergence, not a reason to pick the last Work thread returned.
@@ -197,7 +202,13 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
       evidenceCarriers=structuredClone(selected);
     }
   }
-  const admitted = known ? { id: known.id } : await call('work-open', input);
+  return { envelope, document, input, receiver, sourceCells, known, retainedDocument, evidenceCarriers };
+}
+
+// A receiving receipt is always reconstructed from the original thread's fresh
+// exact-carrier readback, regardless of whether the caller can admit new Work.
+async function readSelectedGitHubWork({ selection, admitted, call }) {
+  const { envelope, document, input, receiver, known, retainedDocument, evidenceCarriers } = selection;
   const thread = admitted?.thread ?? admitted?.id;
   if (typeof thread !== 'string' || !thread) throw new Error('native admission did not identify its thread');
   const readback = await call('work-board', { thread, full: true, limit: 1 });
@@ -211,6 +222,12 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
     if(!sayings.some(saying=>evidenceCarriers.every(({retained})=>(saying.evidence??[]).includes(retained.locator))))
       throw new Error('native readback did not retain the exact selected evidence carriers');
   }
+  // The native journal may advance standing and deliveries, but the selected
+  // original interpretation must still hold. Exact source bytes alone cannot
+  // excuse a changed opening or a different corroboration observation.
+  const readbackDocument = retainedReplayDocument(actual.opening, input, envelope) ?? retainedReportReplay(actual, input, envelope);
+  if (!readbackDocument || readbackDocument.commitment !== retainedDocument.commitment || readbackDocument.locator !== retainedDocument.locator)
+    throw new Error('native readback did not retain the exact source interpretation');
   const offeredSourceRetained = receivedDocument.locator === document.locator;
   const routed = actual.home === receiver;
   // Re-evaluate the SAME original Work at each observed source readback.
@@ -262,6 +279,38 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
   const sourceCells = projectGitHubCells(readGitHubSourceDocument(receivedDocument));
   return Object.freeze({ ...receipt, sourceCells,
     workCells: projectGitHubWorkCells({ source: sourceCells, receipt }) });
+}
+
+/** Guaranteed read-only original Work projection: only work-board is invoked.
+ * Absence is scoped to a complete exact-replay source selection, not a negative
+ * admission fact or authority to open, route, allocate or advance any Work. */
+export async function readPreparedGitHubWork({ prepared, call }) {
+  const selection = await selectPreparedGitHubWork(prepared, call);
+  if (selection.known === undefined) {
+    const { envelope, document, receiver, sourceCells } = selection;
+    return Object.freeze({
+      state: 'NATIVE_NOT_RECEIVED',
+      reason: 'no-exact-original-work',
+      providerObjectKey: envelope.providerObjectKey,
+      eventKey: envelope.eventKey,
+      offeredSourceDocument: document.commitment,
+      expectedReceiver: receiver,
+      sourceCells,
+    });
+  }
+  return readSelectedGitHubWork({ selection, admitted: { id: selection.known.id }, call });
+}
+
+/** The effectful part has no filesystem, credentials, receipt map or provider SDK.
+ * It can run in the same authenticated client that supplied the source binding. */
+export async function receivePreparedGitHubWork({ prepared, call }) {
+  const selection = await selectPreparedGitHubWork(prepared, call);
+  const admitted = selection.known ? { id: selection.known.id } : await call('work-open', selection.input);
+  return readSelectedGitHubWork({ selection, admitted, call });
+}
+
+export function readGitHubWork({ event, opening, binding, call }) {
+  return readPreparedGitHubWork({ prepared: prepareGitHubWork({ event, opening, binding }), call });
 }
 
 export function receiveGitHubWork({ event, opening, binding, call }) {
