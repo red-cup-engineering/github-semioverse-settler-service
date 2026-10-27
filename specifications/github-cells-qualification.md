@@ -15,9 +15,16 @@ against their Git identities. The native Cell runtime is the issued
 
 The existing exact ActivityPub0.8.4 and Git0.1.7 suppliers remain selected.
 The lock was regenerated with native npm in lock-only mode with lifecycle
-scripts disabled. Independent closure inspection found no missing dependency
-paths or mismatched exact dependency pins. Older supplier-specific SignCell
-requirements retain their own resolved placements.
+scripts disabled. Independent inspection found no missing declared dependency
+paths or mismatched exact dependency pins. That inspection did not cover every
+optional peer placement: the first clean
+[CI install](https://github.com/red-cup-engineering/github-semioverse-settler-service/actions/runs/40433967387)
+correctly rejected the absent `jayson` placement of `utf-8-validate@5.0.10`.
+Regenerating in an empty directory with the runner's npm10.9.3 restored that
+placement without changing any selected versions. Native `npm10.9.3 ci
+--dry-run` and `npm11.9.0 ci --dry-run` resolver checks then passed. The full
+fresh install remains the separate public CI gate. Older supplier-specific SignCell requirements retain
+their own resolved placements.
 
 ## Exercised receiving paths
 
