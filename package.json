@@ -9,7 +9,7 @@
     "url": "git+https://github.com/red-cup-engineering/github-semioverse-settler-service.git"
   },
   "scripts": {
-    "check": "node --check src/settler.mjs && node --check src/file-receipt-store.mjs && node --check src/metroplat-http-admit.mjs && node --check src/metroplat-actor-delivery.mjs && node --check src/transport-selection.mjs && node --check src/native-work-receiving.mjs && node --check src/reconcile.mjs && node --check src/github-poll.mjs && node --check scripts/settle-github-event.mjs && node --check scripts/observe-github.mjs && node --check test/settler.test.mjs && node --check test/runtime-edge.test.mjs && node --check test/actor-transport.test.mjs && node --check test/reconcile.test.mjs && node --check test/github-poll.test.mjs",
+    "check": "node --check src/settler.mjs && node --check src/file-receipt-store.mjs && node --check src/metroplat-http-admit.mjs && node --check src/metroplat-actor-delivery.mjs && node --check src/transport-selection.mjs && node --check src/native-work-receiving.mjs && node --check src/reconcile.mjs && node --check src/github-poll.mjs && node --check scripts/settle-github-event.mjs && node --check scripts/observe-github.mjs && node --check test/settler.test.mjs && node --check test/runtime-edge.test.mjs && node --check test/actor-transport.test.mjs && node --check test/reconcile.test.mjs && node --check test/github-poll.test.mjs && node --check src/github-envelope.mjs && node --check src/github-cells.mjs && node --check scripts/project-github-cells.mjs && node --check test/github-cells.test.mjs && node --check test/github-cells-integration.test.mjs && node --check scripts/reconcile-github.mjs",
     "test": "node --test test/*.test.mjs",
     "verify": "npm run check && npm test"
   },
@@ -19,7 +19,8 @@
   "bin": {
     "settle-github-event": "./scripts/settle-github-event.mjs",
     "observe-github": "./scripts/observe-github.mjs",
-    "reconcile-github": "./scripts/reconcile-github.mjs"
+    "reconcile-github": "./scripts/reconcile-github.mjs",
+    "project-github-cells": "./scripts/project-github-cells.mjs"
   },
   "exports": {
     ".": "./src/settler.mjs",
@@ -29,17 +30,21 @@
     "./reconcile": "./src/reconcile.mjs",
     "./github-poll": "./src/github-poll.mjs",
     "./metroplat-actor-delivery": "./src/metroplat-actor-delivery.mjs",
-    "./transport-selection": "./src/transport-selection.mjs"
+    "./transport-selection": "./src/transport-selection.mjs",
+    "./github-cells": "./src/github-cells.mjs",
+    "./github-envelope": "./src/github-envelope.mjs"
   },
   "files": [
     "package.json",
     "README*",
     "LICENSE*",
     "scripts",
-    "src"
+    "src",
+    "specifications"
   ],
   "dependencies": {
-    "@red-cup-engineering/activitypub-services-section": "0.8.4"
+    "@red-cup-engineering/activitypub-services-section": "0.8.4",
+    "@red-cup-engineering/signcell": "0.13.1-dev.217"
   },
   "devDependencies": {
     "@red-cup-engineering/git-services-section": "0.1.7"

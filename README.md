@@ -9,7 +9,7 @@
 
 Deterministic GitHub→MetroPlat receiving core for `red-cup-engineering/git-engineering-services-section#1`.
 
-This package keeps GitHub provider identity distinct from organizational truth. It normalizes selected material GitHub deltas into typed envelopes, preserves repository ID plus observed owner/name, binds exact provider revision, extracts machine-addressable WorkUnit fields when present, and provides replay-safe settlement through a durable receipt store.
+This package keeps GitHub provider identity distinct from organizational truth. It normalizes selected material GitHub deltas into typed envelopes, produces native SignCell evidence from those observations, preserves repository ID plus observed owner/name, binds exact provider revision, and provides replay-safe settlement through a durable receipt store. Verified native Work readback also produces Cells about the existing thread and a deterministic next receiving action.
 
 Issue comments, PR review comments, and reviews retain their own provider
 identities and parent links. The arrival retains the exact object material,
@@ -43,19 +43,26 @@ existing normalizer. No actor inference, new gate or transport is introduced.
 `test/native-work-receiving.test.mjs` covers absent-sender admission, exact
 readback/replay, changed provenance/interpretation and audience refusals.
 
-This source correction does not repair historical records. The HTTP settler's
-`eventKey` excludes the triggering actor, although the CloudEvent ID includes
-it. An existing durable event-key receipt can therefore suppress the corrected
-snapshot before transport even when its CloudEvent ID changes. Do not delete,
-relabel or reinterpret those receipts as proof of corrected receiving. Native
-work replay compares the full retained observation, including triggering actor;
-that separate comparison must not be confused with HTTP receipt deduplication.
-Historical correction and independently verified receiving remain separate work.
+The envelope's historical `eventKey` still binds material, object, revision and
+action. It does not bind every provenance field. The HTTP adapter now selects a
+`cloudevent:github-delta:<NI>` receipt key from the complete source CloudEvent,
+including author, triggering actor, visibility and parent type. Corrected source
+provenance therefore requires its own receipt; unchanged transport retries reuse
+that receipt. The signed Actor transport retains its separate existing key.
+Custom admission ports without `receiptKey` retain their explicit historical
+event-key behavior.
+
+Existing metadata-only event-key receipts are preserved unchanged. They are not
+upgraded into proof of complete source receiving and do not suppress the first
+qualified HTTP admission. This requires one new receipt for an already observed
+source when the upgraded HTTP path is first used; reconcile actual native Work
+through its original retained source/thread as before. No receipt is deleted or
+relabelled, and the change does not repair previously lost source evidence.
 
 ## Reconciliation preserves each observed source revision
 
-The reconciler now passes every material-bound provider event to the existing
-durable event-key settler. Git SHAs are opaque identifiers, not ordered clocks;
+The reconciler passes every material-bound provider event to the existing
+durable settler and its selected transport receipt identity. Git SHAs are opaque identifiers, not ordered clocks;
 two edits can also have the same timestamp. No lexicographic/numeric/timestamp
 high-water can prove an earlier event was already received. The misleading
 high-water store and its skip rule have been retired.
@@ -79,7 +86,7 @@ identity, revision and action. The ingress adapter projects that existing
 event into standard CloudEvents 1.0 with a canonical SHA-256 NI event ID,
 stable numeric GitHub repository source, GitHub delta type and the original
 provenance-bearing observation as data. Only the transport delivery ID is
-excluded from source identity, so two retries are byte-identical while
+excluded from source identity, so retries of an unchanged normalized revision are byte-identical while
 distinct repository aliases or actors cannot collide under one CloudEvent ID.
 The original eventKey remains inside the typed observation. This is source custody, **not** a new Semiotic Lineage Control
 format or an institutional authority claim.
@@ -226,6 +233,92 @@ so unresolved original obligations are not erased by an archive flag.
 
 It deliberately does **not** make GitHub canonical, infer authority from repository names, or call an LLM on the happy path.
 
+## Shared GitHub Cells and WorkCells
+
+`./github-cells` provides one pure projection for all properties. The runtime
+supplier is the issued `@red-cup-engineering/signcell@0.13.1-dev.217`, including
+its actual Cell constructor, evidence joins, content addresses and CloudEvents
+codec. These are native Cells, with their existing FOUR readings; no GitHub-only
+Cell class or alternate truth algebra is introduced.
+
+- `projectGitHubCells(envelope)` returns `sourceCells`: stable subject identity,
+  immutable observation identity, canonical native Cells and their Cell-set ID.
+- `gitHubCellCloudEvents(sourceCells)` carries those exact claims through
+  SignCell's standard claim profile. It checks the complete projection against
+  its retained source before exporting any event.
+- `projectGitHubWorkCells({ source: sourceCells, receipt })` requires the original
+  native receiver's correlated receipt and produces `workCells` under the actual
+  thread ID. It does not create a thread or authenticate an arbitrary receipt.
+
+An issue or PR subject is
+`github:repo:<repository-id>:<issue|pull_request>:number:<number>`. GitHub's
+Issues API also returns PRs with a different provider ID; the PR marker selects
+the same stable subject as the Pull Requests API. Each original provider ID is
+retained as an alias claim. Repository renames preserve subjects. Comments and
+reviews keep their own identities and link to their correctly typed parent.
+
+Changing facts belong to an observation, not timelessly to that subject.
+Consequently an older closed snapshot and a newer reopened snapshot coexist
+without being mistaken for contradictory simultaneous states. Material edits
+on the same head remain distinct. Delivery IDs do not alter an unchanged
+normalized observation; the existing sparse-input fallback can itself use a
+delivery ID as the revision when provider revision material is absent.
+Reviews keep the reviewed commit; check runs/suites keep tested commit, status,
+conclusion and app; merge groups keep their own candidate head and base. These
+facts do not decide review policy, complete check coverage or merge authority.
+
+The native Boolean claim is `(observation, predicate, true)`. Positive and
+negative evidence occupy its two existing sides. Missing facts have neither;
+contradictory facts keep both. In particular, a synthetic `merge_commit_sha`
+does not prove merging. Explicit `merged: false` or `merged_at: null` is negative
+merge evidence; `merged: true` or a valid non-null merge timestamp is positive.
+
+Every `settleGitHubEvent`/`settleGitHubEnvelope` result now includes `sourceCells`,
+including replay and pending transport results. Cell construction and source
+admission occur before a durable claim or external effect. `prepareGitHubWork`
+includes the same projection while preserving its original two-source native
+opening. `receivePreparedGitHubWork` reconstructs Cells from the source document
+actually retained by the board and returns `sourceCells` plus `workCells`.
+Historical journal documents remain readable; no duplicate Work database or
+Cell migration is needed to derive these readings.
+
+WorkCell facts have a new `observation` for each changed native readback and a
+separate `sourceObservation`. The actual thread is `subject`. Source retention,
+native admission, routing, standing and the arena's assay remain independent
+claims. `work.customer-accepted` stays unknown: neither a GitHub merge nor an
+arena verdict supplies the customer's own receiving evidence.
+
+`workCells.next` standardizes the next bounded receiving step:
+
+| Observed condition, in order | Next step |
+| --- | --- |
+| Wrong receiving home | `receive-routing` |
+| Native assay rejected | `repair-delivery` |
+| Delivery awaits assay | `receive-assay` |
+| Native arena accepted | `receive-customer` |
+| Conflicting lifecycle evidence | `reconcile-source-evidence` |
+| Established merge | `receive-downstream` |
+| Closed source without an established merge | `reconcile-closed-source` |
+| Draft candidate | `complete-draft` |
+| Remaining native work | `continue-native-work` |
+
+These are deterministic candidates for the existing duty processor. They grant
+no merge, closure, deletion or execution authority. Existing policy and native
+operations still govern effects. Source projection does not assert that an
+upgraded package has been installed on any property.
+
+For read-only intake and standard claim export, the package supplies:
+
+```sh
+project-github-cells --cloud-events < github-event.json
+```
+
+It accepts one provider event of at most 256 KiB, prints `sourceCells` and the
+optional standard claim events, and performs no network or Work effect. The
+existing receiving path remains the route for actual native Work. See
+[the shared contract](specifications/github-cells.md) for identity, invariant,
+verification and migration details.
+
 ## Native work receiving
 
 `./native-work-receiving` exports `receiveGitHubWork({ event, opening, binding,
@@ -281,7 +374,7 @@ session's CTO incumbency, peer receipt, actuator execution or customer acceptanc
 `settle-github-event` reads one GitHub event JSON object on stdin and:
 
 1. normalizes it as `semioverse.github-delta.v1`;
-2. checks a persistent event-key→receipt store;
+2. checks the persistent complete-source CloudEvent-key→receipt store;
 3. POSTs an unseen envelope as a supplied CloudEvent to MetroPlat's `/arrivals` boundary;
 4. requires a successful `metroplat.arrival.receipt`;
 5. persists the receipt mapping;
@@ -389,8 +482,8 @@ returns `PENDING_RECEIVER_READBACK` and retains the claim instead of inserting
 a fake `receiptId`. The initial result exposes the source event NI, sender and
 recipient Actor URIs and Activity ID; a subsequent run sees the same held claim
 and does not resubmit the uncertain act. The original `/arrivals` adapter
-continues to receive and store its original native receipt, without changing
-its behavior.
+continues to receive its original native arrival receipt shape. Its complete-source
+receipt key is described above; the two transports keep separate namespaces.
 
 The next source-owned receiving step is to return a signed,
 request-correlated **native arrival receipt** from the instance Actor (or read

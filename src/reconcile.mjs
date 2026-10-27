@@ -5,7 +5,7 @@ const required = (value, name) => {
 
 /** Reconcile exact GitHub observations, never a guessed revision ordering.
  * Git SHAs are not clocks; edits can share timestamps and arrive out of order.
- * The receiving settlement port owns durable eventKey-based replay protection. */
+ * The receiving settlement port owns its durable source receipt identity. */
 export async function reconcileGitHubDeltas({ list, settle, scope = "default", limit = 100 } = {}) {
   if (typeof list !== "function") throw new TypeError("list function is required");
   if (typeof settle !== "function") throw new TypeError("settle function is required");
@@ -28,15 +28,16 @@ export async function reconcileGitHubDeltas({ list, settle, scope = "default", l
   const results = [];
   for (const item of selected) {
     // Never discard a source just because an unrelated revision sorted later.
-    // Only the exact event-key receipt can establish idempotent receiving.
+    // Only the selected transport's source receipt establishes replay.
     const outcome = await settle(item.object);
+    const cells = outcome?.sourceCells ? { sourceCells: outcome.sourceCells } : {};
     if (!outcome || !["RECEIVED", "DUPLICATE_RECEIVED"].includes(outcome.state)) {
       results.push({ state: "NOT_SETTLED", providerObjectKey: item.providerObjectKey,
-        revision: item.revision, eventKey: item.eventKey, outcome: outcome ?? null });
+        revision: item.revision, eventKey: item.eventKey, ...cells, outcome: outcome ?? null });
       continue;
     }
     results.push({ state: outcome.state, providerObjectKey: item.providerObjectKey,
-      revision: item.revision, eventKey: item.eventKey, receipt: outcome.receipt ?? null });
+      revision: item.revision, eventKey: item.eventKey, ...cells, receipt: outcome.receipt ?? null });
   }
   return {
     scope, observed: selected.length,

@@ -41,11 +41,7 @@ const store = new FileReceiptStore(
 const admit = await selectGitHubSemioverseTransport();
 
 const result = await reconcileGitHubDeltas({
-  list: async () => deltas.map(envelope => ({
-    ...envelope,
-    revision: envelope.source.revision,
-    eventKey: envelope.eventKey,
-  })),
+  list: async () => deltas,
   settle: envelope => settleGitHubEnvelope({ envelope, receiptStore: store, admit }),
   scope: owners.join(","),
 });
