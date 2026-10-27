@@ -2,10 +2,11 @@ name: Native GitHub signal to Work feedback
 on:
   pull_request:
     paths:
-      - 'src/native-work-receiving.mjs'
-      - 'src/settler.mjs'
-      - 'test/native-work-receiving.test.mjs'
-      - 'test/settler.test.mjs'
+      - 'src/**'
+      - 'test/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/native-work-feedback.yml'
   workflow_dispatch:
 
@@ -23,11 +24,16 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: '22.18.0'
+      - name: Receive the locked native suppliers without lifecycle effects
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Check the real source-to-Work modules
         run: |
           node --check src/settler.mjs
           node --check src/native-work-receiving.mjs
+          node --check src/github-envelope.mjs
+          node --check src/github-cells.mjs
+          node --check scripts/project-github-cells.mjs
           node --check test/settler.test.mjs
           node --check test/native-work-receiving.test.mjs
       - name: Execute original native Work signal, replay and receiving tests
-        run: node --test test/native-work-receiving.test.mjs test/settler.test.mjs
+        run: npm run verify

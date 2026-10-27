@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { assertGitHubEnvelope, canonicalGitHubValue as canonical, revisionFor, objectIdentityFor } from './github-envelope.mjs';
+import { projectGitHubCells } from './github-cells.mjs';
 
 const REQUIRED = (value, name) => {
   if (typeof value !== 'string' || value.trim() === '') throw new TypeError(`${name} is required`);
@@ -13,18 +15,13 @@ const objectFor = (event) => {
   if (event.pull_request) return ['pull_request', event.pull_request];
   if (event.issue) return ['issue', event.issue];
   if (event.workflow_run) return ['workflow_run', event.workflow_run];
+  if (event.check_run) return ['check_run', event.check_run];
+  if (event.check_suite) return ['check_suite', event.check_suite];
+  if (event.merge_group) return ['merge_group', event.merge_group];
   if (event.deployment) return ['deployment', event.deployment];
   if (event.repository) return ['repository', event.repository];
   throw new TypeError('unsupported GitHub event object');
 };
-
-function canonical(value) {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
-  }
-  return value;
-}
 
 // Reuse the normalizer's canonical byte ordering for CloudEvent source identity.
 export { canonical as canonicalGitHubValue };
@@ -96,21 +93,15 @@ function machineFields(body = '') {
   return out;
 }
 
-const revisionFor = (type, object, event) => {
-  if (type === 'pull_request') return object.head?.sha ?? object.updated_at ?? event.delivery_id;
-  if (type === 'workflow_run') return object.head_sha ?? object.updated_at ?? event.delivery_id;
-  return object.updated_at ?? object.submitted_at ?? object.created_at ?? object.sha ?? event.delivery_id;
-};
-
 export function normalizeGitHubEvent(event) {
   if (!event || typeof event !== 'object') throw new TypeError('event is required');
   const repo = event.repository;
-  if (!repo || !Number.isInteger(repo.id) || typeof repo.full_name !== 'string') {
+  if (!repo || !Number.isSafeInteger(repo.id) || repo.id <= 0 || typeof repo.full_name !== 'string' || !repo.full_name.trim()) {
     throw new TypeError('repository.id and repository.full_name are required');
   }
   const [objectType, object] = objectFor(event);
-  const objectId = object.node_id ?? object.id ?? object.number;
-  if (objectId === undefined || objectId === null) throw new TypeError('provider object identity is required');
+  const objectId = objectIdentityFor(objectType, object);
+  if (objectId === undefined || objectId === null || !String(objectId).trim()) throw new TypeError('provider object identity is required');
   const revision = revisionFor(objectType, object, event);
   if (revision === undefined || revision === null) throw new TypeError('provider revision is required');
   const action = REQUIRED(event.action ?? 'observed', 'action');
@@ -148,6 +139,7 @@ export function normalizeGitHubEvent(event) {
       deliveryId: event.delivery_id ?? null,
       url: object.html_url ?? repo.html_url ?? null,
       ...(parent ? { parent: Object.freeze({
+        objectType: event.pull_request || parent.pull_request ? 'pull_request' : 'issue',
         objectId: String(parent.node_id ?? parent.id ?? parent.number),
         objectNumber: parent.number ?? null,
         url: parent.html_url ?? null,
@@ -220,16 +212,17 @@ const receiptOutcome = (receipt) => Object.freeze({ kind: 'RECEIPT', receipt });
 const pendingOutcome = (claim, transport) => Object.freeze({ kind: 'PENDING', claim,
   ...(transport === undefined ? {} : { transport }) });
 
-function exposedResult(state, envelope, outcome) {
+function exposedResult(state, envelope, outcome, sourceCells) {
   if (outcome.kind === 'PENDING') {
     return Object.freeze({
       state: 'PENDING_RECEIVER_READBACK',
       envelope,
+      sourceCells,
       claim: outcome.claim,
       ...(outcome.transport === undefined ? {} : { transport: outcome.transport }),
     });
   }
-  return Object.freeze({ state, envelope, receipt: outcome.receipt });
+  return Object.freeze({ state, envelope, sourceCells, receipt: outcome.receipt });
 }
 
 export async function settleGitHubEvent({ event, receiptStore, admit }) {
@@ -239,31 +232,16 @@ export async function settleGitHubEvent({ event, receiptStore, admit }) {
 /** Provider snapshot already normalized by the GitHub poller.
  * Reuse the webhook intake's durable event-key receipts and claim handling. */
 export async function settleGitHubEnvelope({ envelope, receiptStore, admit }) {
-  if (envelope?.schema !== 'semioverse.github-delta.v1' ||
-      typeof envelope.providerObjectKey !== 'string' || typeof envelope.eventKey !== 'string' ||
-      !Number.isSafeInteger(envelope.source?.repositoryId) || envelope.source.repositoryId <= 0 ||
-      typeof envelope.source?.objectType !== 'string' || typeof envelope.source?.objectId !== 'string' ||
-      typeof envelope.source?.revision !== 'string' || typeof envelope.action !== 'string' ||
-      !envelope.material || typeof envelope.material !== 'object')
-    throw new TypeError('complete normalized GitHub observation required');
-  const materialIdentity = 'ni:///sha-256;' +
-    createHash('sha256').update(JSON.stringify(canonical(envelope.material))).digest('base64url');
-  const providerKey = 'github:repo:' + envelope.source.repositoryId + ':' +
-    envelope.source.objectType + ':' + envelope.source.objectId;
-  const eventKey = providerKey + ':revision:' + envelope.source.revision +
-    ':action:' + envelope.action + ':material:' + materialIdentity;
-  if (materialIdentity !== envelope.materialIdentity || providerKey !== envelope.providerObjectKey ||
-      eventKey !== envelope.eventKey || String(revisionFor(envelope.source.objectType,
-        envelope.material, {delivery_id: envelope.source.deliveryId})) !== envelope.source.revision)
-    throw new Error('normalized GitHub event identity does not bind its provider material');
+  envelope = assertGitHubEnvelope(envelope);
+  // Qualify the native representation before any durable claim or transport.
+  const sourceCells = projectGitHubCells(envelope);
   if (!receiptStore || typeof receiptStore.get !== 'function' || typeof receiptStore.put !== 'function') {
     throw new TypeError('receiptStore get/put interface is required');
   }
   if (typeof admit !== 'function') throw new TypeError('admit function is required');
-  // Source events sent by a commissioned Actor have a distinct, complete
-  // CloudEvent NI receipt identity. The older HTTP adapter keeps the original
-  // eventKey for its already persisted native arrival receipts; never
-  // reinterpret old metadata-only receipts as full signed Actor receiving.
+  // HTTP and signed Actor ports bind their own complete source CloudEvent
+  // receipt identities. Custom ports retain their original event-key fallback.
+  // Old metadata-only receipts never prove newly qualified source receiving.
   const receiptKey = typeof admit.receiptKey === 'function'
     ? admit.receiptKey(envelope) : envelope.eventKey;
   if (typeof receiptKey !== 'string' || receiptKey.length > 2048 || !receiptKey)
@@ -274,14 +252,14 @@ export async function settleGitHubEnvelope({ envelope, receiptStore, admit }) {
   const existing = receiptStore.get(receiptKey);
   if (existing) {
     clearSettledClaim(receiptStore, receiptKey);
-    return Object.freeze({ state: 'DUPLICATE_RECEIVED', envelope, receipt: existing });
+    return Object.freeze({ state: 'DUPLICATE_RECEIVED', envelope, sourceCells, receipt: existing });
   }
 
   const inflight = inflightFor(receiptStore);
   const pending = inflight.get(receiptKey);
   if (pending !== undefined) {
     const outcome = await pending;
-    return exposedResult('DUPLICATE_RECEIVED', envelope, outcome);
+    return exposedResult('DUPLICATE_RECEIVED', envelope, outcome, sourceCells);
   }
 
   const durableClaims = hasDurableClaimInterface(receiptStore);
@@ -350,7 +328,7 @@ export async function settleGitHubEnvelope({ envelope, receiptStore, admit }) {
   inflight.set(receiptKey, admission);
   try {
     const outcome = await admission;
-    return exposedResult('RECEIVED', envelope, outcome);
+    return exposedResult('RECEIVED', envelope, outcome, sourceCells);
   } finally {
     if (inflight.get(receiptKey) === admission) inflight.delete(receiptKey);
   }

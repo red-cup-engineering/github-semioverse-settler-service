@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { canonicalGitHubValue } from './settler.mjs';
+import { assertGitHubEnvelope, canonicalGitHubValue } from './github-envelope.mjs';
 
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.trim() === '') throw new TypeError(`${label} is required`);
@@ -9,6 +9,7 @@ function requiredText(value, label) {
 /** Native CloudEvents v1.0 projection of an immutable GitHub source observation.
  * The source material remains testimony; this is arrival custody, not work admission. */
 export function githubDeltaCloudEvent(envelope) {
+  envelope = assertGitHubEnvelope(envelope);
   if (envelope?.schema !== 'semioverse.github-delta.v1' ||
       !Number.isSafeInteger(envelope.source?.repositoryId) || envelope.source.repositoryId <= 0 ||
       typeof envelope.eventKey !== 'string' || envelope.eventKey.length === 0 ||
@@ -45,7 +46,7 @@ export function createMetroplatArrivalAdmit({url,authorization = undefined,fetch
     throw new TypeError('MetroPlat supplied CloudEvent admission requires the /arrivals endpoint');
   if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required');
 
-  return async function admit(envelope) {
+  const admit = async function admit(envelope) {
     const event = githubDeltaCloudEvent(envelope);
     const headers = {accept:'application/json','content-type':'application/cloudevents+json'};
     if (authorization !== undefined) headers.authorization = requiredText(authorization,'MetroPlat authorization');
@@ -64,4 +65,9 @@ export function createMetroplatArrivalAdmit({url,authorization = undefined,fetch
       ...(typeof receipt.admission?.artifact?.path === 'string' ? {logPath:receipt.admission.artifact.path} : {}),
     });
   };
+  // The complete source observation, including provenance and parent kind,
+  // owns this receipt. Preserve historical event-key receipts without using
+  // them as proof that corrected source fields were already received.
+  admit.receiptKey = envelope => `cloudevent:github-delta:${githubDeltaCloudEvent(envelope).id}`;
+  return admit;
 }

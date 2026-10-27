@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { normalizeGitHubEvent } from './settler.mjs';
+import { projectGitHubCells, projectGitHubWorkCells } from './github-cells.mjs';
 
 const MEDIA = 'data:application/json;base64,';
 const MAX_MATERIAL_BYTES = 256 * 1024;
@@ -121,6 +122,7 @@ export function prepareGitHubWork({ event, opening, binding }) {
   }
   if (typeof envelope.source.url !== 'string' || !envelope.source.url.startsWith('https://github.com/')) throw new TypeError('original GitHub locator is required');
   const document = gitHubSourceDocument(envelope);
+  const sourceCells = projectGitHubCells(envelope);
   const input = {
     ...structuredClone(opening),
     ...(binding.as === undefined ? {} : { as: binding.as }),
@@ -131,7 +133,7 @@ export function prepareGitHubWork({ event, opening, binding }) {
     ],
   };
   if (input.move === 'report') input.evidence = [...(input.evidence ?? []), document.locator];
-  return Object.freeze({ envelope, document, input, receiver: binding.receiver });
+  return Object.freeze({ envelope, document, sourceCells, input, receiver: binding.receiver });
 }
 
 /** Complete canonical source selection, reused by arrival and closure receiving. */
@@ -164,6 +166,8 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
   // Compare the immutable offered snapshot, not nested objects a caller might
   // have mutated after prepareGitHubWork captured the source document.
   const offeredObservation = readGitHubSourceDocument(document);
+  // Admit the recoverable Cell representation before an opening can occur.
+  projectGitHubCells(offeredObservation);
   let known;
   let retainedDocument = document;
   let evidenceCarriers = retainedGitHubEvidence(input.evidence ?? [], input.evidence ?? []) ?? [];
@@ -230,7 +234,7 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
     independentCustomerReceiving: 'not-established-by-this-source',
     effect: 'read-only-native-source-projection',
   });
-  return Object.freeze({
+  const receipt = Object.freeze({
     state: routed ? 'NATIVE_RECEIVED' : 'NATIVE_RECEIVED_UNROUTED',
     thread,
     providerObjectKey: envelope.providerObjectKey,
@@ -249,6 +253,11 @@ export async function receivePreparedGitHubWork({ prepared, call }) {
     stages: Object.freeze({ sourceRetained: true, offeredSourceRetained, nativeAdmitted: true, routed, allocated: false, implemented: false, accepted: false }),
     peerHandoff: admitted.peerHandoff ?? null,
   });
+  // Read Cells from the document actually retained by this native thread.
+  // The arena journal remains the durable owner; no second mutable board.
+  const sourceCells = projectGitHubCells(readGitHubSourceDocument(receivedDocument));
+  return Object.freeze({ ...receipt, sourceCells,
+    workCells: projectGitHubWorkCells({ source: sourceCells, receipt }) });
 }
 
 export function receiveGitHubWork({ event, opening, binding, call }) {
