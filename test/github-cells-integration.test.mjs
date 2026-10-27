@@ -215,3 +215,69 @@ else { process.stderr.write('unexpected fixture provider path'); process.exitCod
   assert.equal(received[0].data.material.body, source.issue.body);
   assert.equal(Object.hasOwn(received[0].data, 'revision'), false, 'poll metadata does not change the closed source envelope');
 });
+
+test('the real reconcile CLI consumes archive census JSON into native Cells and replays without another arrival', async t => {
+  const folder = mkdtempSync(join(tmpdir(), 'github-ref-cells-cli-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const repository = { id: 561, full_name: 'house/service', owner: { login: 'house' },
+    default_branch: 'main', private: false };
+  const refName = 'refs/tags/archive/preserved';
+  const objectSha = 'a'.repeat(40);
+  const ref = { ref: refName, object: { type: 'tag', sha: objectSha } };
+  const census = { recordKind: 'github.archive-ref-census/v1',
+    repositoryId: repository.id, repositoryFullName: repository.full_name,
+    defaultBranch: 'main', defaultHeadSha: 'b'.repeat(40),
+    sourceCoverage: 'complete-exact-archive-ref-list-at-two-reads',
+    prefix: 'refs/tags/archive', count: 1, effectsPerformed: false,
+    refs: [{ recordKind: 'github.archive-ref-observation/v1', refName, objectSha,
+      objectType: 'tag', sourceConsumerReceiving: 'not-observed', automaticRefRetirementAllowed: false }] };
+  const censusPath = join(folder, 'census.json');
+  writeFileSync(censusPath, JSON.stringify({ sourceRefAssays: [census] }));
+  writeFileSync(join(folder, 'gh'), '#!/usr/bin/env node\n' +
+    'const args = process.argv.slice(2);\n' +
+    'if (args[0] !== "api") process.exit(21);\n' +
+    `if (args[1] === "repos/house/service") process.stdout.write(${JSON.stringify(JSON.stringify(repository))});\n` +
+    `else if (args[1] === "repos/house/service/git/ref/tags/archive/preserved") process.stdout.write(${JSON.stringify(JSON.stringify(ref))});\n` +
+    'else { process.stderr.write("Unselected source: " + args[1]); process.exit(22); }\n',
+    { mode: 0o755 });
+  const received = [];
+  const server = createServer(async (req, res) => {
+    assert.equal(req.url, '/arrivals');
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    received.push(JSON.parse(Buffer.concat(chunks)));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ kind: 'metroplat.arrival.receipt', ok: true,
+      cloudEventIdentity: 'archive-source-arrival', packetDigest: 'archive-source-packet' }));
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const env = { ...process.env, PATH: `${folder}:${process.env.PATH}`,
+    GITHUB_SETTLER_OWNERS: 'house', GITHUB_SETTLER_STATE: 'open',
+    GITHUB_SETTLER_ARCHIVE_CENSUS_FILE: censusPath,
+    GITHUB_SETTLER_ARCHIVE_SELECTED_REFS: JSON.stringify([refName]),
+    GITHUB_SETTLER_INCLUDE_REFS: '0', GITHUB_SETTLER_INCLUDE_DISCUSSION: '0',
+    GITHUB_SEMIOVERSE_TRANSPORT: 'cloudevents-http',
+    GITHUB_SEMIOVERSE_RECEIPT_FILE: join(folder, 'receipts.json'),
+    METROPLAT_ARRIVAL_URL: `http://127.0.0.1:${server.address().port}/arrivals`,
+    METROPLAT_AUTHORIZATION: 'fixture-only',
+  };
+  delete env.GITHUB_SETTLER_SINCE;
+  delete env.GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS;
+  const execute = async () => JSON.parse((await promisify(execFile)(process.execPath,
+    [new URL('../scripts/reconcile-github.mjs', import.meta.url).pathname], {
+      encoding: 'utf8', timeout: 15000, env,
+    })).stdout);
+  const first = await execute(), replay = await execute();
+  assert.equal(first.newlyReceived, 1);
+  assert.equal(replay.replayed, 1);
+  assert.equal(received.length, 1);
+  assert.equal(received[0].data.source.objectId, refName);
+  assert.equal(received[0].data.source.objectType, 'git_ref');
+  assert.equal(received[0].data.material.object.type, 'tag');
+  const projection = first.results[0].sourceCells;
+  assert.equal(projection.cells.find(value => value.predicate === 'git.object-id').object, objectSha);
+  assert.equal(projection.cellSetId, replay.results[0].sourceCells.cellSetId);
+});

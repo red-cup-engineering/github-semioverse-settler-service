@@ -114,3 +114,56 @@ identity; an existing event-key-only receipt cannot prove that corrected
 provenance was received. Historical receipts remain intact, and an unchanged
 complete-source retry reuses its new receipt. Custom ports without a receipt
 key retain their existing event-key behavior.
+
+## 2026-10-27: archived refs and discussion recovery integrated with Cells
+
+Source basis: canonical main `240735411ad1d099d6704306c8042903f0e82ce8`,
+typed-ref donor `82cd7748b09e5332772233a4b3ecfe583fe6fb75` (PR #3), and
+discussion donor `415ec9e8c9936e1eb9bb85bcc78f27e8b629a7a2` (PR #5).
+GitHub comparison confirms the discussion donor contains the typed-ref donor
+(9 commits ahead, 0 behind). Canonical integration preserves both histories.
+
+The existing `npm run verify` completed on the integrated native source:
+**205 tests passed, 0 failed, 0 cancelled, 0 skipped, 0 todo**, with source
+syntax checks successful. Runtime: Node **24.22.1**, npm **11.9.0**.
+`npm ci --ignore-scripts --no-audit --no-fund` installed the exact unchanged
+frozen lock, Git blob `1b1cc69fdf700ca0bf377dd9fde706c5bf5d6bd1`, including
+`@red-cup-engineering/signcell@0.13.1-dev.217` and
+`@red-cup-engineering/activitypub-services-section@0.8.4`. Installation used
+an isolated RAM-backed workspace, 731 MiB installed plus 146 MiB package cache;
+no lifecycle scripts or production configuration were run.
+
+Additional integration receiving exercises the real reconciliation executable
+with an original census file, a synthetic GitHub provider, a loopback HTTP
+arrival receiver, and a persisted receipt file across process restart. The
+second invocation reuses the receipt and sends no second arrival. This is
+native executable/transport integration evidence, not deployed MetroPlat Work.
+
+Requirement cases include current ref namespaces, annotated tag-object custody,
+bounded pagination, same-time discussion edits, duplicate-source refusal,
+CloudEvents round trips, current visibility overriding stale caller metadata,
+and rejection before receipt claims. The coordinating agent reviewed the
+source integration before canonical publication. No independent live
+Work/customer acceptance is asserted.
+
+Exact Git blob identities of executed production modules:
+
+| File | Git blob SHA-1 |
+| --- | --- |
+| `scripts/reconcile-github.mjs` | `2d7a47b1736ef599f01de21600ca5bb1a39c62d9` |
+| `src/github-cells.mjs` | `0e7d9cc138c9d5b1756959007110d70a9298a823` |
+| `src/github-envelope.mjs` | `0408263703e7e5ed4cac52d8cc5461f42795abd7` |
+| `src/github-poll.mjs` | `7a6e035bd1ea6848531c204173c9cbff770f4445` |
+| `src/native-work-receiving.mjs` | `14e2ae1e925b3c88e691b8191776c2994ddab664` |
+| `src/settler.mjs` | `d5652b007ca8a655435362e1b38d38472c2da567` |
+
+A private preserved archive source was also acquired through four sequential
+authenticated GitHub observations and passed through the exact native collector
+and projector: 20 Cells and 20 CloudEvents. The public Work route refused
+its private audience. Private source bytes remain in private receiving custody
+and are not included in this public repository. The L-Space consumer receives
+the same native Cell projection separately.
+
+The selected package needs a new immutable registry version and installed
+operator selection before these changes can be claimed as production
+operation. Registry version 0.1.3 already exists and must not be overwritten.

@@ -15,14 +15,46 @@ export function canonicalGitHubValue(value) {
 }
 
 export const revisionFor = (type, object, event) => {
+  if (type === 'git_ref') return object.object?.sha;
   if (type === 'pull_request') return object.head?.sha ?? object.updated_at ?? event.delivery_id;
   if (['workflow_run', 'check_run', 'check_suite', 'merge_group'].includes(type))
     return object.head_sha ?? object.updated_at ?? event.delivery_id;
   return object.updated_at ?? object.submitted_at ?? object.created_at ?? object.sha ?? event.delivery_id;
 };
 
-export const objectIdentityFor = (type, object) => object.node_id ?? object.id ?? object.number ??
+export const objectIdentityFor = (type, object) => type === 'git_ref' ? object.ref : object.node_id ?? object.id ?? object.number ??
   (type === 'merge_group' ? object.head_sha : undefined);
+
+/** Git's full reference name is the source identity, not its moving target. */
+export function admitGitHubRefName(ref) {
+  if (typeof ref !== 'string' || !/^refs\/(?:(?:heads|tags)\/.+|archive(?:\/.+)?)$/u.test(ref) ||
+      ref.split('/').some(part => !part || part.startsWith('.') || part.endsWith('.lock')) ||
+      ref.endsWith('.') || ref.includes('..') ||
+      ['~', '^', ':', '?', '*', '[', '\\', '@{'].some(bad => ref.includes(bad)) ||
+      /[\u0000-\u0020\u007F]/u.test(ref))
+    throw new TypeError('GitHub Git ref requires a valid heads/, tags/ or archive/ refname');
+  return ref;
+}
+
+/** Provider-standard locator; immutable material retains the observed target. */
+export function gitHubRefLocator(repositoryFullName, ref) {
+  if (typeof repositoryFullName !== 'string' ||
+      !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repositoryFullName))
+    throw new TypeError('GitHub ref locator requires an exact owner/repository name');
+  admitGitHubRefName(ref);
+  return 'https://api.github.com/repos/' + repositoryFullName + '/git/refs/' +
+    ref.slice('refs/'.length).split('/').map(encodeURIComponent).join('/');
+}
+
+export function admitGitHubRefMaterial(material) {
+  admitGitHubRefName(material?.ref);
+  if (!['commit', 'tag', 'tree', 'blob'].includes(material?.object?.type) ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(material?.object?.sha ?? ''))
+    throw new TypeError('GitHub Git ref requires an exact typed SHA-1 or SHA-256 target');
+  if (material.ref.startsWith('refs/heads/') && material.object.type !== 'commit')
+    throw new TypeError('Git branch references must target a commit');
+  return material;
+}
 
 /** Read the same material-bound v1 envelope before a projection or effect.
  * Admission establishes internal correspondence, not GitHub authentication. */
@@ -40,6 +72,11 @@ export function assertGitHubEnvelope(input) {
       !envelope.work || typeof envelope.work !== 'object' || Array.isArray(envelope.work) ||
       (envelope.submission !== null && (typeof envelope.submission !== 'object' || Array.isArray(envelope.submission))))
     throw new TypeError('complete normalized GitHub observation required');
+  if (envelope.source.objectType === 'git_ref') {
+    admitGitHubRefMaterial(envelope.material);
+    if (envelope.source.url !== gitHubRefLocator(envelope.source.repositoryFullName, envelope.material.ref))
+      throw new TypeError('Git ref source locator differs from its exact provider coordinates');
+  }
   const materialIdentity = 'ni:///sha-256;' + createHash('sha256')
     .update(JSON.stringify(canonicalGitHubValue(envelope.material))).digest('base64url');
   const providerKey = 'github:repo:' + envelope.source.repositoryId + ':' +

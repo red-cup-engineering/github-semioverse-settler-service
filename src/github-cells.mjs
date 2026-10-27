@@ -24,6 +24,7 @@ export const GITHUB_CELL_PREDICATES = Object.freeze({
   checkName: 'github.check-name', checkStatus: 'github.check-status',
   checkConclusion: 'github.check-conclusion', checkHead: 'github.check-head',
   checkApp: 'github.check-app',
+  refName: 'git.ref-name', gitObjectType: 'git.object-type', gitObjectId: 'git.object-id',
 });
 
 export const WORK_CELL_PREDICATES = Object.freeze({
@@ -133,6 +134,11 @@ export function projectGitHubCells(input) {
   fact(P.visibility, source.visibility);
   fact(P.url, source.url);
   fact(P.updatedAt, material.updated_at, 'material.updated_at');
+  if (source.objectType === 'git_ref') {
+    fact(P.refName, material.ref, 'material.ref');
+    fact(P.gitObjectType, material.object.type, 'material.object.type');
+    fact(P.gitObjectId, material.object.sha, 'material.object.sha');
+  }
   if (present(source.author) || present(source.authorId))
     fact(P.author, { login: source.author ?? null, id: source.authorId ?? null });
   if (present(source.actor) || present(source.actorId))

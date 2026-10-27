@@ -333,3 +333,41 @@ test('accepted-looking Work standing without an observed accepted delivery is no
   assert.equal(receipt.nativeWork.deliveries.accepted, 0);
   assert.equal(receipt.stages.accepted, false);
 });
+
+test('branch and tag source selectors retain distinct GitHub ref identities in native Work', () => {
+  const sample = input();
+  const repository = { ...sample.event.repository, html_url: 'https://github.com/house/site' };
+  const opening = { move: 'ask', question: 'Which original Work, if any, does this ref affect?' };
+  const prepare = ref => prepareGitHubWork({
+    event: {
+      repository, action: 'observed',
+      git_ref: {
+        ref, object: { type: 'commit', sha: 'a'.repeat(40) },
+        // The source locator is derived from authenticated provider coordinates,
+        // not a mutable or incorrectly attributed object URL.
+        url: 'https://example.invalid/forged-ref'
+      }
+    },
+    binding: sample.binding, opening
+  });
+  const branch = prepare('refs/heads/feat/an#issue');
+  const tag = prepare('refs/tags/feat/an#issue');
+  const historical = prepare('refs/archive/2026-10-09/codex/an#issue');
+  assert.equal(branch.envelope.source.url,
+    'https://api.github.com/repos/house/site/git/refs/heads/feat/an%23issue');
+  assert.equal(tag.envelope.source.url,
+    'https://api.github.com/repos/house/site/git/refs/tags/feat/an%23issue');
+  assert.equal(historical.envelope.source.url,
+    'https://api.github.com/repos/house/site/git/refs/archive/2026-10-09/codex/an%23issue');
+  assert.equal(historical.envelope.source.objectId,'refs/archive/2026-10-09/codex/an#issue');
+  assert.equal(historical.input.sources[0].kind,'github-git-ref');
+  assert.equal(historical.input.sources[1].kind,'github-source-document');
+  assert.equal(readGitHubSourceDocument(historical.document).source.objectId,
+    'refs/archive/2026-10-09/codex/an#issue');
+  assert.notEqual(historical.input.sources[0].locator, tag.input.sources[0].locator);
+  assert.notEqual(branch.input.sources[0].locator, tag.input.sources[0].locator);
+  assert.equal(branch.input.sources[0].kind, 'github-git-ref');
+  assert.equal(readGitHubSourceDocument(branch.document).source.objectId,
+    'refs/heads/feat/an#issue');
+  assert.equal(branch.input.sources[1].kind, 'github-source-document');
+});

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectGitHubRepositoryDeltas } from "../src/github-poll.mjs";
+import { collectGitHubRepositoryDeltas, collectGitHubRepositories, projectArchiveRefSelectionsFromCensus } from "../src/github-poll.mjs";
+import { MemoryReceiptStore, normalizeGitHubEvent, settleGitHubEnvelope } from "../src/settler.mjs";
+import { prepareGitHubWork, readGitHubSourceDocument } from "../src/native-work-receiving.mjs";
 
 test("poller paginates and preserves exact PR head revision", async () => {
   const calls = [];
@@ -38,4 +40,745 @@ test("poller paginates and preserves exact PR head revision", async () => {
 
 test("poller rejects incomplete repository identity", async () => {
   await assert.rejects(() => collectGitHubRepositoryDeltas({ getJson: async () => [], repository: { id: 561 } }), /repository\.id and repository\.full_name are required/u);
+});
+
+
+test("opt-in current branch and annotated-tag refs are typed, source-bound and replay-safe", async () => {
+  const repo = {id: 561, full_name: "red-cup-engineering/x", html_url: "https://github.com/red-cup-engineering/x"};
+  const a = "a".repeat(40), b = "b".repeat(40);
+  const branch = {ref: "refs/heads/feat/small", node_id: "REF_b", object: {type: "commit", sha: a},
+    url: "https://api.github.com/repos/red-cup-engineering/x/git/refs/heads/feat/small"};
+  const tag = {ref: "refs/tags/archive/old", object: {type: "tag", sha: b},
+    url: "https://api.github.com/repos/red-cup-engineering/x/git/refs/tags/archive/old"};
+  const requested = [];
+  const getJson = async path => {
+    requested.push(path);
+    if (path.startsWith("repos/red-cup-engineering/x/issues?")) return [];
+    if (path === "repos/red-cup-engineering/x/git/matching-refs/heads") return [branch];
+    if (path === "repos/red-cup-engineering/x/git/matching-refs/tags") return [tag];
+    throw new Error("unexpected API path " + path);
+  };
+  const rows = await collectGitHubRepositoryDeltas({getJson, repository: repo, includeRefs: true});
+  assert.equal(rows.length, 2);
+  assert.deepEqual(new Set(rows.map(x => x.source.objectId)), new Set([branch.ref, tag.ref]));
+  for (const row of rows) {
+    assert.equal(row.source.objectType, "git_ref");
+    assert.equal(row.source.actor, null);
+    assert.equal(row.source.author, null);
+    assert.equal(row.source.occurredAt, null, "a source snapshot has no invented event time");
+    assert.equal(row.source.repositoryId, 561);
+    assert.equal(row.source.revision, row.material.object.sha);
+    assert.equal(row.material.url.startsWith("https://api.github.com/repos/"), true);
+    assert.equal(row.source.url, row.material.url, "native source must identify this ref, not the repository homepage");
+  }
+  assert.equal(rows.find(x => x.source.objectId === tag.ref).material.object.type, "tag");
+  assert.equal(requested.length, 5);
+  const store = new MemoryReceiptStore(); let admitted = 0;
+  const admit = async () => ({receiptId: String(++admitted)});
+  const selected = rows.find(x => x.source.objectId === branch.ref);
+  assert.equal((await settleGitHubEnvelope({envelope:selected,receiptStore:store,admit})).state, "RECEIVED");
+  assert.equal((await settleGitHubEnvelope({envelope:selected,receiptStore:store,admit})).state, "DUPLICATE_RECEIVED");
+  const moved = normalizeGitHubEvent({repository:repo, action:"observed",git_ref:{...branch,object:{...branch.object,sha:b}}});
+  assert.equal(moved.providerObjectKey,selected.providerObjectKey);
+  assert.notEqual(moved.eventKey,selected.eventKey);
+  assert.equal((await settleGitHubEnvelope({envelope:moved,receiptStore:store,admit})).state,"RECEIVED");
+  assert.equal(admitted,2);
+});
+
+test("ref polling refuses repeated and malformed identities before any receiving", async () => {
+  const repo = {id: 561, full_name:"red-cup-engineering/x"};
+  const row = {ref:"refs/heads/a",object:{type:"commit",sha:"a".repeat(40)}};
+  const getJson = async path => {
+    if (path.includes("/issues?")) return [];
+    if (path.includes("/matching-refs/heads")) return [row,row];
+    return [];
+  };
+  await assert.rejects(collectGitHubRepositoryDeltas({getJson,repository:repo,includeRefs:true}),/repeated/u);
+  for (const ref of ["refs/pull/123/head","refs/heads/../other","refs/heads/x.lock","refs/heads/name with space"]) {
+    assert.throws(()=>normalizeGitHubEvent({repository:repo,git_ref:{ref,object:{type:"commit",sha:"a".repeat(40)}}}),/refname/u);
+  }
+  assert.throws(()=>normalizeGitHubEvent({repository:repo,git_ref:{...row,object:{type:"commit",sha:"bad"}}}),/exact typed SHA/u);
+  assert.throws(()=>normalizeGitHubEvent({repository:repo,git_ref:{...row,object:{type:"mystery",sha:"a".repeat(40)}}}),/exact typed SHA/u);
+});
+
+test("ordinary issue polling does not expand into expensive ref enumeration", async () => {
+  const getJson = async path => {
+    if (path.startsWith("repos/red-cup-engineering/x/issues?")) return [];
+    throw new Error("ref scanning unexpectedly selected: " + path);
+  };
+  assert.deepEqual(await collectGitHubRepositoryDeltas({
+    getJson, repository:{id:561,full_name:"red-cup-engineering/x"}
+  }),[]);
+});
+
+
+const archiveSource=(repo,ref,sha,type='commit')=>({
+ repositoryFullName:repo.full_name,repositoryId:repo.id,
+ refName:ref,objectSha:sha,objectType:type,
+});
+
+test("one source-qualified custom Git ref produces one native Work event without traversing 504 other refs",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x",default_branch:"main",private:false};
+ const sha="a".repeat(40),ref="refs/archive/2026-10-08/stash-218";
+ const selected=archiveSource(repo,ref,sha);
+ const selectedPath="repos/red-cup-engineering/x/git/ref/archive/2026-10-08/stash-218";
+ const repositoryPath="repos/red-cup-engineering/x",paths=[];
+ const response={ref,object:{type:"commit",sha},
+   url:"https://api.github.com/repos/red-cup-engineering/x/git/refs/archive/2026-10-08/stash-218"};
+ const getJson=async path=>{
+  paths.push(path);
+  if(path.startsWith(repositoryPath+"/issues?"))return [];
+  if(path===repositoryPath)return {id:561,full_name:repo.full_name,default_branch:"main",private:false};
+  if(path===selectedPath)return response;
+  throw new Error("unselected repository or full archive read "+path);
+ };
+ const rows=await collectGitHubRepositoryDeltas({
+  getJson,repository:repo,archiveRefSources:[selected],
+ });
+ assert.equal(rows.length,1);
+ assert.equal(rows[0].source.objectType,"git_ref");
+ assert.equal(rows[0].source.objectId,ref);
+ assert.equal(rows[0].source.repositoryId,561);
+ assert.equal(rows[0].source.revision,sha);
+ assert.equal(rows[0].source.occurredAt,null);
+ assert.equal(rows[0].source.actor,null);
+ assert.equal(rows[0].source.url,
+  "https://api.github.com/repos/red-cup-engineering/x/git/refs/archive/2026-10-08/stash-218");
+ assert.equal(paths.filter(path=>path===selectedPath).length,2);
+ assert.equal(paths.filter(path=>path===repositoryPath).length,2);
+ assert.equal(paths.length,5,"one issue reading plus four exact GitHub source/identity reads");
+ assert.equal(paths.some(path=>path.includes("matching-refs/archive")),false,
+  "the native selected ref producer must not materialize a broad Git namespace");
+ const store=new MemoryReceiptStore();let received=0;
+ const admit=async()=>({receiptId:String(++received)});
+ assert.equal((await settleGitHubEnvelope({envelope:rows[0],receiptStore:store,admit})).state,"RECEIVED");
+ assert.equal((await settleGitHubEnvelope({envelope:rows[0],receiptStore:store,admit})).state,"DUPLICATE_RECEIVED");
+ assert.equal(received,1,"the original native Work transport only receives identical material once");
+});
+
+test("a different valid source lot retains typed annotations and exact distinct pinned Git targets",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x",default_branch:"main"};
+ const refA="refs/archive/2026-10-08/source-one",refB="refs/archive/2026-10-08/source-two";
+ const a="a".repeat(40),b="b".repeat(40);
+ const sources=[archiveSource(repo,refA,a),archiveSource(repo,refB,b,"tag")];
+ const source=path=>path==="repos/red-cup-engineering/x/git/ref/archive/2026-10-08/source-one"
+  ?{ref:refA,object:{sha:a,type:"commit"}}
+  :{ref:refB,object:{sha:b,type:"tag"}};
+ const calls=[];
+ const getJson=async path=>{
+  calls.push(path);
+  if(path.includes("/issues?"))return [];
+  if(path==="repos/red-cup-engineering/x")
+   return {id:repo.id,full_name:repo.full_name,default_branch:"main"};
+  if(path.startsWith("repos/red-cup-engineering/x/git/ref/archive/"))return source(path);
+  throw new Error("unselected source "+path);
+ };
+ const rows=await collectGitHubRepositoryDeltas({getJson,repository:repo,archiveRefSources:sources});
+ assert.equal(rows.length,2);
+ assert.deepEqual(new Set(rows.map(row=>row.source.objectId)),new Set([refA,refB]));
+ assert.equal(rows.find(row=>row.source.objectId===refB).material.object.type,"tag");
+ assert.equal(calls.filter(path=>path.includes("/git/ref/archive/")).length,4);
+ assert.equal(calls.length,7);
+ assert.equal(calls.some(path=>path.includes("matching-refs")),false);
+});
+
+test("selected archive producer refuses stale provider IDs, retargeting, or fabricated source material",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x",default_branch:"main"};
+ const ref="refs/archive/unfinished-code",sha="a".repeat(40);
+ const source=archiveSource(repo,ref,sha),path="repos/red-cup-engineering/x/git/ref/archive/unfinished-code";
+ const baseline={id:repo.id,full_name:repo.full_name,default_branch:"main"};
+ const good={ref,object:{type:"commit",sha}},attempt=async(port,selection=[source])=>
+  collectGitHubRepositoryDeltas({
+   getJson:async target=>{
+    if(target.includes("/issues?"))return [];
+    if(target==="repos/red-cup-engineering/x")return port.repo();
+    if(target===path)return port.ref();
+    throw Error("unselected provider "+target);
+   },repository:repo,archiveRefSources:selection,
+  });
+ const stable=()=>baseline;
+ let reads=0;
+ await assert.rejects(attempt({repo:stable,ref:()=>reads++===0?good:{...good,object:{...good.object,sha:"b".repeat(40)}}}),
+  /changed from its admitted source object/u);
+ await assert.rejects(attempt({repo:stable,ref:()=>({...good,ref:"refs/archive/different"})}),
+  /changed from its admitted source object/u);
+ await assert.rejects(attempt({repo:()=>({...baseline,id:562}),ref:()=>good}),
+  /repository identity changed/u);
+ let checks=0;
+ await assert.rejects(attempt({repo:()=>checks++===0?baseline:{...baseline,default_branch:"other"},ref:()=>good}),
+  /repository (?:identity|state) changed/u);
+ await assert.rejects(attempt({repo:stable,ref:()=>({...good,object:{...good.object,type:"blob"}})}),
+  /changed from its admitted source object/u);
+ await assert.rejects(attempt({repo:stable,ref:()=>undefined}),
+  /changed from its admitted source object/u);
+ await assert.rejects(attempt({repo:stable,ref:()=>good},[
+  {...source,objectSha:"not-an-oid"},
+ ]),/typed Git object source/u);
+ await assert.rejects(attempt({repo:stable,ref:()=>good},[
+  {...source,refName:"refs/archive/../malformed"},
+ ]),/refname/u);
+ await assert.rejects(attempt({repo:stable,ref:()=>good},[source,source]),
+  /Unique original Git archive source identity/u);
+});
+
+test("exact numeric repository identity and pinned object are required before any cross-owner read",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x",default_branch:"main"};
+ const other={id:562,full_name:"red-cup-engineering/y",default_branch:"main"};
+ const ref="refs/archive/2026-10-23/historical-code",sha="a".repeat(40);
+ const selected=archiveSource(repo,ref,sha);
+ const calls=[];
+ const getJson=async path=>{
+  calls.push(path);
+  if(path.endsWith("/issues?state=open&per_page=30&page=1"))return [];
+  if(path==="repos/red-cup-engineering/x")
+   return {id:561,full_name:repo.full_name,default_branch:"main"};
+  if(path==="repos/red-cup-engineering/x/git/ref/archive/2026-10-23/historical-code")
+   return {ref,object:{sha,type:"commit"}};
+  throw new Error("foreign or unselected source "+path);
+ };
+ const rows=await collectGitHubRepositories({
+  getJson,repositories:[repo,other],archiveRefSelections:[selected],
+ });
+ assert.equal(rows.length,1);
+ assert.equal(rows[0].source.repositoryId,561);
+ assert.equal(calls.filter(path=>path.endsWith("/git/ref/archive/2026-10-23/historical-code")).length,2);
+ assert.equal(calls.some(path=>path.includes("/y/git/")),false);
+ const wrong=[
+  [{...selected,repositoryId:562}],
+  [{...selected,repositoryFullName:"alien/owner"}],
+  [{...selected,refName:"refs/tags/not-an-archive"}],
+  [{...selected,objectSha:"b".repeat(39)}],
+  [selected,selected],
+  [{...selected,received:true}],
+  [{repository:repo.full_name,refName:ref}],
+ ];
+ for(const sources of wrong){
+  await assert.rejects(collectGitHubRepositories({
+   getJson:async()=>{throw new Error("No provider reads permitted for unadmitted source");},
+   repositories:[repo,other],archiveRefSelections:sources,
+  }), /original|typed|refname|namespace|previously enumerated/u);
+ }
+ const defaults=await collectGitHubRepositories({
+  getJson:async path=>{
+   if(path.includes("/issues?"))return [];
+   throw new Error("default operation unexpectedly selected an archive ref");
+  },repositories:[repo,other],
+ });
+ assert.deepEqual(defaults,[]);
+});
+
+test("optional branch/tag fabricator reads complete 161-tag namespace twice without repeated page requests",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x"};
+ const branches=[{ref:"refs/heads/main",object:{type:"commit",sha:"a".repeat(40)}}];
+ const tags=Array.from({length:161},(_,i)=>({ref:"refs/tags/archive/source-"+i,
+  object:{type:"commit",sha:"b".repeat(40)}}));
+ const calls=[];
+ const getJson=async path=>{
+  calls.push(path);
+  if(path.startsWith("repos/red-cup-engineering/x/issues?"))return [];
+  if(path==="repos/red-cup-engineering/x/git/matching-refs/heads")return branches;
+  if(path==="repos/red-cup-engineering/x/git/matching-refs/tags")return tags;
+  throw Error("unexpected source request "+path);
+ };
+ const before=await collectGitHubRepositoryDeltas({getJson,repository:repo,includeRefs:true});
+ assert.equal(before.length,162);
+ assert.equal(calls.filter(x=>x.includes("/matching-refs/heads")).length,2);
+ assert.equal(calls.filter(x=>x.includes("/matching-refs/tags")).length,2);
+ assert.equal(calls.length,5);
+ assert.equal(calls.some(x=>x.includes("/matching-refs/")&&x.includes("?")),false,
+   "Git's prefix-ref endpoint is not an ordinary paginated issues endpoint");
+ assert.equal(new Set(before.map(x=>x.providerObjectKey)).size,162);
+ const after=await collectGitHubRepositoryDeltas({getJson,repository:repo,includeRefs:true});
+ assert.deepEqual(before.map(x=>x.eventKey),after.map(x=>x.eventKey));
+});
+
+test("complete branch/tag source resists retargeting, over-bound refs, duplicates and foreign prefix",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x"};
+ const main={ref:"refs/heads/main",object:{type:"commit",sha:"a".repeat(40)}};
+ const tags=[{ref:"refs/tags/good",object:{type:"tag",sha:"b".repeat(40)}}];
+ const original="repos/red-cup-engineering/x/git/matching-refs/";
+ const source=(heads,tagsSource)=>{
+  let seen=0;return async path=>{
+   if(path.includes("/issues?"))return [];
+   if(path===original+"heads")return typeof heads==="function"?heads(seen++):heads;
+   if(path===original+"tags")return tagsSource;
+   throw Error("unknown Git provider read "+path);
+  };
+ };
+ let cuts=0;
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:source(()=>cuts++===0?[main]:[{...main,object:{type:"commit",sha:"c".repeat(40)}}],tags),
+  repository:repo,includeRefs:true,
+ }),/changed during provider source reading/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:source([main,main],tags),repository:repo,includeRefs:true,
+ }),/repeated original Git ref/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:source(Array.from({length:513},(_,i)=>({
+   ref:"refs/heads/branch-"+i,object:{type:"commit",sha:"a".repeat(40)},
+  })),tags),repository:repo,includeRefs:true,
+ }),/over bounded source budget/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson:source([main,{ref:"refs/heads/../escape",object:{type:"commit",sha:"a".repeat(40)}}],tags),
+  repository:repo,includeRefs:true,
+ }),/refname/u);
+ const neighbor={ref:"refs/tagstones/wrong-prefix",object:{type:"commit",sha:"a".repeat(40)}};
+ const valid=await collectGitHubRepositoryDeltas({
+  getJson:source([main],[neighbor,...tags]),repository:repo,includeRefs:true,
+ });
+ assert.deepEqual(new Set(valid.map(x=>x.source.objectId)),new Set([main.ref,tags[0].ref]));
+ assert.equal(valid.length,2);
+});
+
+
+
+test("source-owned GHS archive JSON really feeds one pinned GitHub Semioverse event", async()=>{
+ const repository={id:561,full_name:"red-cup-engineering/x",default_branch:"main"};
+ const sha="a".repeat(40),commit="b".repeat(40);
+ const refName="refs/archive/2026-10-23/agent-unreceived-source";
+ const refCensus={
+  recordKind:"github.archive-ref-census/v1",
+  repositoryId:repository.id,repositoryFullName:repository.full_name,
+  defaultBranch:"main",defaultHeadSha:sha,
+  sourceCoverage:"complete-exact-archive-ref-list-at-two-reads",
+  prefix:"refs/archive",count:2,effectsPerformed:false,
+  refs:[
+   {recordKind:"github.archive-ref-observation/v1",
+    refName,objectSha:commit,objectType:"commit",
+    sourceConsumerReceiving:"not-observed",automaticRefRetirementAllowed:false},
+   {recordKind:"github.archive-ref-observation/v1",
+    refName:"refs/archive/2026-10-23/other-source",objectSha:"c".repeat(40),objectType:"tag",
+    sourceConsumerReceiving:"not-observed",automaticRefRetirementAllowed:false},
+  ],
+ };
+ const selections=projectArchiveRefSelectionsFromCensus(refCensus,[refName]);
+ assert.deepEqual(selections,[{
+  repositoryFullName:repository.full_name,repositoryId:repository.id,
+  refName,objectSha:commit,objectType:"commit",
+ }]);
+ assert.equal(Object.isFrozen(selections),true);
+ const called=[];
+ const output=await collectGitHubRepositories({
+  repositories:[repository],archiveRefSelections:selections,
+  getJson:async path=>{
+   called.push(path);
+   if(path.includes("/issues?"))return [];
+   if(path==="repos/red-cup-engineering/x")
+    return {id:561,full_name:repository.full_name,default_branch:"main"};
+   if(path==="repos/red-cup-engineering/x/git/ref/archive/2026-10-23/agent-unreceived-source")
+    return {ref:refName,object:{sha:commit,type:"commit"}};
+   throw new Error("unexpected GitHub source "+path);
+  },
+ });
+ assert.equal(output.length,1);
+ assert.equal(output[0].source.objectId,refName);
+ assert.equal(output[0].source.repositoryId,561);
+ assert.equal(output[0].source.revision,commit);
+ assert.equal(called.filter(p=>p.includes("/git/ref/archive/")).length,2);
+ assert.equal(called.some(p=>p.includes("matching-refs")),false);
+ const store=new MemoryReceiptStore();
+ let witnessed=0;
+ const nativeAdmit=async()=>({receiptId:String(++witnessed)});
+ assert.equal((await settleGitHubEnvelope({envelope:output[0],receiptStore:store,admit:nativeAdmit})).state,"RECEIVED");
+ assert.equal((await settleGitHubEnvelope({envelope:output[0],receiptStore:store,admit:nativeAdmit})).state,"DUPLICATE_RECEIVED");
+ assert.equal(witnessed,1);
+});
+
+test("GHS source→Work projection rejects forged accepted refs, incomplete source or wrong namespace",()=>{
+ const sha="a".repeat(40),refName="refs/archive/2026-10-23/real";
+ const original={
+  recordKind:"github.archive-ref-census/v1",
+  repositoryId:561,repositoryFullName:"red-cup-engineering/x",
+  defaultBranch:"main",defaultHeadSha:sha,
+  sourceCoverage:"complete-exact-archive-ref-list-at-two-reads",
+  prefix:"refs/archive",count:1,effectsPerformed:false,
+  refs:[{
+   recordKind:"github.archive-ref-observation/v1",
+   refName,objectSha:sha,objectType:"commit",
+   sourceConsumerReceiving:"not-observed",automaticRefRetirementAllowed:false,
+  }],
+ };
+ for(const invalid of [
+  {...original,prefix:"refs/tags/archive"},
+  {...original,count:2},
+  {...original,sourceCoverage:"partial"},
+  {...original,effectsPerformed:true},
+  {...original,repositoryId:0},
+  {...original,refs:[{...original.refs[0],sourceConsumerReceiving:"received"}]},
+  {...original,refs:[{...original.refs[0],automaticRefRetirementAllowed:true}]},
+  {...original,refs:[{...original.refs[0],refName:"refs/heads/false-archive"}]},
+  {...original,refs:[original.refs[0],original.refs[0]],count:2},
+ ])assert.throws(()=>projectArchiveRefSelectionsFromCensus(invalid,[refName]),TypeError);
+ assert.throws(()=>projectArchiveRefSelectionsFromCensus(original,["refs/archive/missing"]),TypeError);
+ assert.throws(()=>projectArchiveRefSelectionsFromCensus(original,[]),TypeError);
+ assert.throws(()=>projectArchiveRefSelectionsFromCensus(original,[refName,refName]),TypeError);
+});
+
+
+test("source-only production lot skips unrelated issue and repository payloads",async()=>{
+ const selected={id:561,full_name:"red-cup-engineering/x",default_branch:"main"};
+ const other={id:562,full_name:"red-cup-engineering/y",default_branch:"main"};
+ const sha="a".repeat(40),refName="refs/archive/2026-10-23/preserved-code";
+ const source={repositoryId:selected.id,repositoryFullName:selected.full_name,
+  refName,objectSha:sha,objectType:"commit"};
+ const requested=[];
+ const received=await collectGitHubRepositories({
+  repositories:[selected,other],archiveRefSelections:[source],sourceOnly:true,
+  getJson:async path=>{
+   requested.push(path);
+   if(path==="repos/red-cup-engineering/x")
+    return {id:selected.id,full_name:selected.full_name,default_branch:"main"};
+   if(path==="repos/red-cup-engineering/x/git/ref/archive/2026-10-23/preserved-code")
+    return {ref:refName,object:{type:"commit",sha}};
+   throw new Error("Source-only producer must never read unrelated issues, PRs, refs or repositories: "+path);
+  },
+ });
+ assert.equal(received.length,1);
+ assert.equal(received[0].source.repositoryId,561);
+ assert.equal(received[0].source.objectId,refName);
+ assert.equal(requested.length,4,"two exact repository reads and two exact ref reads");
+ assert.equal(requested.filter(path=>path.includes("/git/ref/")).length,2);
+ assert.equal(requested.some(path=>path.includes("/issues?")||path.includes("/pulls/")||path.includes("/y/")||path.includes("/matching-refs/")),false);
+});
+
+test("source-only producer refuses empty selection, mixed polls, foreign repository and changed source",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x",default_branch:"main"};
+ const refName="refs/archive/2026-10-23/preserved-code";
+ const source={repositoryId:repo.id,repositoryFullName:repo.full_name,
+  refName,objectSha:"a".repeat(40),objectType:"commit"};
+ const forbidden=async()=>{throw new Error("Forbidden provider read before source admission");};
+ for(const mixed of [
+  {archiveRefSelections:[]},
+  {archiveRefSelections:[source],includeRefs:true},
+  {archiveRefSelections:[source],since:"2026-10-01T00:00:00Z"},
+  {archiveRefSelections:[source],state:"closed"},
+ ])await assert.rejects(collectGitHubRepositories({
+  repositories:[repo],sourceOnly:true,getJson:forbidden,...mixed,
+ }),/Source-only Git receiving/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  repository:repo,getJson:forbidden,sourceOnly:true,archiveRefSources:[],
+ }),/Source-only Git receiving/u);
+ await assert.rejects(collectGitHubRepositories({
+  repositories:[repo],sourceOnly:true,
+  archiveRefSelections:[{...source,repositoryId:999}],getJson:forbidden,
+ }),/previously enumerated Git repository/u);
+ let requested=0;
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  repository:repo,sourceOnly:true,archiveRefSources:[source],
+  getJson:async path=>{
+   requested++;
+   if(path==="repos/red-cup-engineering/x")
+    return {id:561,full_name:repo.full_name,default_branch:"main"};
+   if(path==="repos/red-cup-engineering/x/git/ref/archive/2026-10-23/preserved-code")
+    return {ref:refName,object:{type:"commit",sha:"b".repeat(40)}};
+   throw Error("Unexpected source "+path);
+  },
+ }),/changed from its admitted source object/u);
+ assert.equal(requested,2,"stale original SHA refuses at first exact provider read");
+});
+
+
+test("original GHS archive TAG census feeds the existing replay-safe Git source transport",async()=>{
+ // This is the output shape of the original GitHub Engineering
+ // observeArchiveRefCensus, not the separate custom refs/archive namespace.
+ const repository={id:1284325652,full_name:"561-group/bare-cedar-fog",default_branch:"main"};
+ const tagRef="refs/tags/archive/codex-unprocessed-code";
+ const annotatedRef="refs/tags/archive/codex-unprocessed-annotated";
+ const sha="a".repeat(40), annotatedObject="b".repeat(40), currentHead="c".repeat(40);
+ const observation=(refName,objectType,objectSha)=>({
+  recordKind:"github.archive-ref-observation/v1",
+  refName,objectSha,objectType,
+  sourceConsumerReceiving:"not-observed",automaticRefRetirementAllowed:false,
+ });
+ const tag=observation(tagRef,"commit",sha);
+ const annotated=observation(annotatedRef,"tag",annotatedObject);
+ const census={
+  recordKind:"github.archive-ref-census/v1",
+  repositoryId:repository.id,repositoryFullName:repository.full_name,
+  defaultBranch:"main",defaultHeadSha:currentHead,
+  sourceCoverage:"complete-exact-archive-ref-list-at-two-reads",
+  prefix:"refs/tags/archive",count:2,
+  refs:[tag,annotated],effectsPerformed:false,
+ };
+ const selections=projectArchiveRefSelectionsFromCensus(census,[tagRef,annotatedRef]);
+ assert.deepEqual(selections.map(s=>[s.refName,s.objectType,s.objectSha]),[
+  [tagRef,"commit",sha],[annotatedRef,"tag",annotatedObject],
+ ]);
+ assert.equal(Object.isFrozen(selections),true);
+ const root="repos/561-group/bare-cedar-fog";
+ const calls=[];
+ const getJson=async path=>{
+  calls.push(path);
+  if(path===root)return {id:repository.id,full_name:repository.full_name,
+   default_branch:"main",private:true};
+  if(path===root+"/git/ref/tags/archive/codex-unprocessed-code")
+   return {ref:tagRef,object:{type:"commit",sha}};
+  if(path===root+"/git/ref/tags/archive/codex-unprocessed-annotated")
+   return {ref:annotatedRef,object:{type:"tag",sha:annotatedObject}};
+  throw new Error("source-only must not scan unrelated repositories, issues or Git families: "+path);
+ };
+ const deltas=await collectGitHubRepositories({
+  getJson,repositories:[repository,{id:2,full_name:"561-group/elsewhere"}],
+  archiveRefSelections:selections,sourceOnly:true,
+ });
+ assert.equal(deltas.length,2);
+ assert.equal(calls.length,6,"two repo identity reads and twice two exact-ref reads");
+ assert.equal(calls.filter(p=>p.includes("/git/ref/tags/archive/")).length,4);
+ assert.equal(calls.some(p=>p.includes("matching-refs")||p.includes("/issues?")||p.includes("elsewhere")),false);
+ const byRef=new Map(deltas.map(delta=>[delta.source.objectId,delta]));
+ assert.equal(byRef.get(tagRef).source.revision,sha);
+ assert.equal(byRef.get(annotatedRef).source.revision,annotatedObject,
+  "the Git tag-object OID must never be substituted with a peeled commit");
+ assert.notEqual(byRef.get(tagRef).providerObjectKey,byRef.get(annotatedRef).providerObjectKey);
+ // Mock durable transport reception does NOT establish admitted native Work,
+ // consumer acceptance or a private-source disclosure grant.
+ const store=new MemoryReceiptStore();
+ let admitted=0;
+ const admit=async()=>({receiptId:String(++admitted)});
+ for(const delta of deltas){
+  assert.equal((await settleGitHubEnvelope({envelope:delta,receiptStore:store,admit})).state,"RECEIVED");
+  assert.equal((await settleGitHubEnvelope({envelope:delta,receiptStore:store,admit})).state,"DUPLICATE_RECEIVED");
+ }
+ assert.equal(admitted,2);
+
+ // The original upstream Draft 2020-12 record is closed. Neither a different
+ // Git namespace nor an invented acceptance or retirement field is admissible.
+ for(const corrupt of [
+  {...census,prefix:"refs/archive"},
+  {...census,prefix:"refs/tags/archived"},
+  {...census,received:true},
+  {...census,refs:[{...tag,received:true},annotated]},
+  {...census,refs:[tag,{...annotated,sourceConsumerReceiving:"received"}]},
+  {...census,refs:[tag,{...annotated,automaticRefRetirementAllowed:true}]},
+  {...census,refs:[tag,{...annotated,refName:"refs/tags/archive-other/foreign"}]},
+ ])assert.throws(()=>projectArchiveRefSelectionsFromCensus(corrupt,[tagRef]),TypeError);
+ assert.throws(()=>projectArchiveRefSelectionsFromCensus(census,["refs/archive/unrelated"]),TypeError);
+});
+
+
+test("typed archive-tag source respects the original native Work audience boundary",()=>{
+ const repo={id:42,full_name:"red-cup-engineering/public-reference",private:true};
+ const ref="refs/tags/archive/retained-agent-code",sha="a".repeat(40);
+ const event={
+  action:"observed",repository:repo,
+  git_ref:{ref,object:{type:"tag",sha}},
+ };
+ const opening={
+  move:"report",law:"Source observation is not content receiving",
+  subject:"git-ref-typed-test",observation:"Retained source requires owner review",
+ };
+ const binding={
+  repositoryId:42,visibility:"public",
+  scope:["section:red-cup-engineering"],receiver:"section:red-cup-engineering",
+ };
+ assert.throws(()=>prepareGitHubWork({event,opening,binding}),
+  /private or unknown source audience is not verified/u,
+  "typed evidence cannot bypass a private repository disclosure boundary");
+
+ // A *hypothetical public* repository under the same provider format is
+ // admissible to prepare for an independently verified public native caller.
+ // Preparation is not transport execution, Work acceptance or public posting.
+ const publicEvent={...event,repository:{...repo,private:false}};
+ const prepared=prepareGitHubWork({event:publicEvent,opening,binding});
+ assert.equal(prepared.envelope.source.objectId,ref);
+ assert.equal(prepared.envelope.source.revision,sha);
+ assert.equal(prepared.envelope.material.object.type,"tag");
+ assert.equal(prepared.input.sources[0].kind,"github-git-ref");
+ assert.equal(prepared.input.sources[1].kind,"github-source-document");
+ assert.equal(readGitHubSourceDocument(prepared.document).source.objectId,ref);
+ assert.equal(prepared.receiver,binding.receiver);
+});
+
+const discussionFixture = (kind, id, updatedAt="2026-10-24T04:20:00Z") => {
+  const repo="red-cup-engineering/x";
+  const endpoint=kind==="issue"?"issues":"pulls";
+  const parent=kind==="issue"?7:8;
+  return {
+    id,node_id:(kind==="issue"?"IC_":"PRRC_")+id,
+    url:"https://api.github.com/repos/"+repo+"/"+endpoint+"/comments/"+id,
+    html_url:"https://github.com/"+repo+"/"+(kind==="issue"?"issues/7#issuecomment-":"pull/8#discussion_r")+id,
+    ...(kind==="issue"
+      ? {issue_url:"https://api.github.com/repos/"+repo+"/issues/7"}
+      : {pull_request_url:"https://api.github.com/repos/"+repo+"/pulls/8",
+         pull_request_review_id:44,path:"src/work.mjs",
+         original_commit_id:"a".repeat(40)}),
+    body:"Review original Work without granting authority.",
+    user:{id:31,login:"evidence-author"},
+    created_at:"2026-10-23T01:00:00Z",updated_at:updatedAt,
+  };
+};
+
+test("repository-level discussion polling preserves issue and diff-comment identities without N+1 reads",async()=>{
+  const repository={id:561,full_name:"red-cup-engineering/x",private:true};
+  const calls=[];
+  const getJson=async path=>{
+    calls.push(path);
+    if(path.startsWith("repos/red-cup-engineering/x/issues?"))return [];
+    if(path.startsWith("repos/red-cup-engineering/x/issues/comments?"))return [discussionFixture("issue",123)];
+    if(path.startsWith("repos/red-cup-engineering/x/pulls/comments?"))return [discussionFixture("review",456)];
+    throw new Error("unbounded or per-issue query: "+path);
+  };
+  const rows=await collectGitHubRepositoryDeltas({
+    getJson,repository,includeDiscussion:true,since:"2026-10-23T00:00:00Z",perPage:10,maxDiscussionPages:2,
+  });
+  assert.equal(rows.length,2);
+  assert.deepEqual(rows.map(row=>row.source.objectType),["issue_comment","pull_request_review_comment"]);
+  assert.deepEqual(rows.map(row=>row.source.objectId),["IC_123","PRRC_456"]);
+  assert.equal(rows[0].source.actor,null,"polling observer does not impersonate author");
+  assert.equal(rows[0].source.author,"evidence-author");
+  assert.equal(rows[0].source.visibility,"private");
+  assert.equal(rows[0].material.issue_url,"https://api.github.com/repos/red-cup-engineering/x/issues/7");
+  assert.equal(rows[1].material.pull_request_review_id,44);
+  assert.equal(rows[1].material.pull_request_url,"https://api.github.com/repos/red-cup-engineering/x/pulls/8");
+  assert.equal(rows[0].source.parent,undefined,"no invented hydrated issue parent");
+  assert.equal(calls.length,3,"one issue listing plus two repository-level discussion collections");
+  assert.ok(calls.every(path=>path.includes("per_page=10&page=1")));
+  assert.ok(calls.filter(path=>path.includes("/comments?"))
+    .every(path=>path.includes("sort=updated&direction=asc&since=2026-10-23T00%3A00%3A00Z")));
+  const store=new MemoryReceiptStore();let admitted=0;
+  const admit=async()=>({receiptId:String(++admitted)});
+  for(const row of rows){
+    assert.equal((await settleGitHubEnvelope({envelope:row,receiptStore:store,admit})).state,"RECEIVED");
+    assert.equal((await settleGitHubEnvelope({envelope:row,receiptStore:store,admit})).state,"DUPLICATE_RECEIVED");
+  }
+  assert.equal(admitted,2,"both provider comments admitted exactly once");
+});
+
+test("different edits of the same discussion source are distinct; ordinary polling remains lean",async()=>{
+ const repository={id:561,full_name:"red-cup-engineering/x"};
+ const same=discussionFixture("issue",123),later={...same,body:"materially revised Work evidence"};
+ const produce=async row=>collectGitHubRepositoryDeltas({repository,includeDiscussion:true,
+   getJson:async path=>path.includes("/issues/comments?")?[row]:[],
+ });
+ const a=(await produce(same))[0],b=(await produce(later))[0];
+ assert.equal(a.providerObjectKey,b.providerObjectKey);
+ assert.notEqual(a.eventKey,b.eventKey,"same timestamp must not erase material edits");
+ const ordinary=await collectGitHubRepositoryDeltas({repository,
+  getJson:async path=>{if(path.includes("/issues?"))return [];throw Error("unexpected discussion read");}});
+ assert.deepEqual(ordinary,[]);
+});
+
+test("discussion selection is atomic: refuse changed owners, lost provider fields and incomplete source pages",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x"};
+ const baseline=discussionFixture("issue",123),review=discussionFixture("review",456);
+ const collect=(issueRows,reviewRows,options={})=>collectGitHubRepositoryDeltas({
+  repository:repo,includeDiscussion:true,
+  getJson:async path=>path.includes("/issues/comments?")?issueRows:
+    path.includes("/pulls/comments?")?reviewRows:[],
+  ...options,
+ });
+ await assert.rejects(collect([{...baseline,issue_url:"https://api.github.com/repos/foreign/x/issues/7"}],[review]),/outside selected repository/u);
+ await assert.rejects(collect([baseline,baseline],[review]),/duplicates a source identity/u);
+ await assert.rejects(collect([baseline],[{...review,pull_request_review_id:null}]),/parent kind/u);
+ await assert.rejects(collect([baseline],[{...review,url:"https://api.github.com/repos/foreign/x/pulls/comments/456"}]),/API identity/u);
+ await assert.rejects(collect([{...baseline,updated_at:"2026-01-01T00:00:00Z"}],[review]),/chronology/u);
+ await assert.rejects(collect([baseline],[review],{perPage:1,maxDiscussionPages:1}),/pagination bound/u);
+ await assert.rejects(collect([baseline],[review],{maxDiscussionPages:21}),/bounded to 1/u);
+ await assert.rejects(collect([baseline],[review],{includeDiscussion:"yes"}),/explicitly selected/u);
+ let calls=0;
+ await assert.rejects(collect([baseline],[review],{
+   getJson:async path=>{calls+=1;
+     if(path.includes("/pulls/comments?"))throw Error("provider denied review visibility");
+     return path.includes("/issues/comments?")?[baseline]:[];},
+ }),/provider denied review visibility/u);
+ assert.equal(calls,3,"no partial discussion result escapes on second-source failure");
+});
+
+test("source-only archive-ref observing refuses accidental discussion expansion before provider access",async()=>{
+ let requested=0;
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  repository:{id:561,full_name:"red-cup-engineering/x"},
+  getJson:async()=>{requested+=1;return [];},
+  sourceOnly:true,includeDiscussion:true,
+  archiveRefSources:[{refName:"refs/archive/a",repositoryId:561,repositoryFullName:"red-cup-engineering/x",
+   objectType:"commit",objectSha:"a".repeat(40)}],
+ }),/Source-only/u);
+ assert.equal(requested,0);
+});
+
+test("discussion source selection propagates to multiple original repositories without cross-owner aliasing",async()=>{
+ const a={id:561,full_name:"red-cup-engineering/x"};
+ const b={id:562,full_name:"red-cup-engineering/y"};
+ const row=discussionFixture("issue",123);
+ const calls=[];
+ const getJson=async path=>{calls.push(path);
+  if(path.includes("/issues/comments?"))return path.startsWith("repos/red-cup-engineering/x/")?[row]:[];
+  return [];
+ };
+ const rows=await collectGitHubRepositories({getJson,repositories:[a,b],includeDiscussion:true,maxDiscussionPages:2});
+ assert.equal(rows.length,1);
+ assert.equal(rows[0].source.repositoryId,561);
+ assert.equal(calls.filter(path=>path.includes("/comments?")).length,4);
+});
+
+test("incremental GitHub Work reads closed issues and merged PRs by default, not just open work",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x",private:true};
+ const since="2026-10-23T00:00:00Z",calls=[];
+ const issue={number:3,id:103,node_id:"I_closed_3",state:"closed",closed_at:"2026-10-23T10:00:00Z",
+   updated_at:"2026-10-23T10:00:00Z",html_url:"https://github.com/red-cup-engineering/x/issues/3",
+   user:{id:31,login:"author"}};
+ const pr={number:4,id:104,node_id:"I_merged_4",pull_request:{},state:"closed",
+   updated_at:"2026-10-23T11:00:00Z",html_url:"https://github.com/red-cup-engineering/x/pull/4",
+   user:{id:31,login:"author"}};
+ const getJson=async path=>{
+   calls.push(path);
+   if(path.includes("/issues?state=all&since="))return [issue,pr];
+   if(path.endsWith("/pulls/4"))return {number:4,node_id:"PR_merged_4",state:"closed",merged:true,
+     merged_at:"2026-10-23T11:00:00Z",head:{sha:"a".repeat(40)},
+     updated_at:"2026-10-23T11:00:00Z",html_url:"https://github.com/red-cup-engineering/x/pull/4",
+     user:{id:31,login:"author"}};
+   throw new Error("incorrect full-lifecycle selector "+path);
+ };
+ const rows=await collectGitHubRepositoryDeltas({getJson,repository:repo,since,perPage:10});
+ assert.equal(rows.length,2);
+ assert.deepEqual(rows.map(x=>x.source.objectType),["issue","pull_request"]);
+ assert.equal(rows[0].material.state,"closed");
+ assert.equal(rows[1].material.merged,true);
+ assert.ok(calls[0].includes("state=all&since="),"closure-inclusive provider query is actually used");
+ assert.equal(rows[1].source.revision,"a".repeat(40));
+ // This is source testimony, never a customer ACK or independently merged Git commit proof.
+});
+
+test("explicit open-only GitHub Work selection remains a deliberately partial source view",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x"};
+ const calls=[];
+ const getJson=async path=>{calls.push(path);return [];};
+ const rows=await collectGitHubRepositoryDeltas({
+  getJson,repository:repo,state:"open",since:"2026-10-23T00:00:00Z",perPage:10,
+ });
+ assert.deepEqual(rows,[]);
+ assert.match(calls[0],/issues\?state=open&since=/u);
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson,repository:repo,state:"pending",perPage:10,
+ }),/GitHub Work source state/u);
+ assert.equal(calls.length,1,"invalid state refuses before the next provider call");
+});
+
+test("repeated issue or PR identities across changing GitHub pages refuse the whole Work source lot",async()=>{
+ const repo={id:561,full_name:"red-cup-engineering/x"};
+ const a={number:11,id:111,node_id:"I11",html_url:"https://github.com/red-cup-engineering/x/issues/11",
+   user:{id:31,login:"author"},updated_at:"2026-10-23T01:00:00Z"};
+ const b={number:12,id:112,node_id:"I12",html_url:"https://github.com/red-cup-engineering/x/issues/12",
+   user:{id:31,login:"author"},updated_at:"2026-10-23T01:00:00Z"};
+ const requests=[];
+ const getJson=async path=>{
+  requests.push(path);
+  return path.endsWith("page=1")?[a,b]:[b];
+ };
+ await assert.rejects(collectGitHubRepositoryDeltas({
+  getJson,repository:repo,perPage:2,maxPages:3
+ }),/repeated across pages/u);
+ assert.equal(requests.length,2,"a changing paginated lot must not be treated as complete evidence");
+});
+
+test("multi-repository incremental query inherits closure-inclusive selection",async()=>{
+ const repositories=[{id:561,full_name:"red-cup-engineering/x"},{id:562,full_name:"561-group/y"}];
+ const observed=[];
+ const getJson=async path=>{observed.push(path);return [];};
+ const rows=await collectGitHubRepositories({
+  getJson,repositories,since:"2026-10-23T00:00:00Z",perPage:10,
+ });
+ assert.deepEqual(rows,[]);
+ assert.equal(observed.length,2);
+ assert.ok(observed.every(path=>path.includes("issues?state=all&since=")));
 });

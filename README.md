@@ -530,3 +530,76 @@ The repository projects the original Computer Operations0.1.2 issue/PR form
 family, including ANT (Autonomous National Territory), Sovereign Service
 Enterprise, and native Message/Work receiving continuity. These fields retain
 source testimony and return addresses; the native receiver verifies authority.
+
+
+## Reclaim preserved Git sources and recover discussions
+
+The existing poller, normalizer, Cell projector and durable receipt path now
+receive branches, tags, custom archive refs, issue comments and inline review
+comments. The original PR #3 and stacked PR #5 have been reconciled with the
+current native Cell implementation; their source lineage and receiving
+contract are in [Git source reclamation](specifications/git-source-reclamation.md).
+
+All normalized observations produce native SignCells. Git refs add descriptive
+`git.ref-name`, `git.object-type`, and `git.object-id` claims with exact material
+field witnesses. The stable subject is repository ID plus full ref name;
+observing a different target creates a new immutable observation. An annotated
+tag retains its tag-object identity until a separate authenticated tag-object
+reader actually peels it. Retained provider material keeps GitHub's own keys.
+The same Cells round-trip through the existing CloudEvents codec.
+
+### Select the observation scope
+
+| Setting | Behavior |
+| --- | --- |
+| `GITHUB_SETTLER_INCLUDE_REFS=1` | Add current heads and tags; read each bounded `matching-refs` family twice and reject changed material |
+| `GITHUB_SETTLER_INCLUDE_DISCUSSION=1` | Recover issue-conversation and inline review-comment snapshots through two repository-level lists |
+| `GITHUB_SETTLER_SINCE=<UTC timestamp>` | Read changed lifecycle state, including closed/merged items by default |
+| `GITHUB_SETTLER_STATE=open\|closed\|all` | Explicitly select a narrower or full lifecycle view |
+| `GITHUB_SETTLER_DISCUSSION_MAX_PAGES=10` | Bound each discussion list; accepted range 1–20 |
+| `GITHUB_SETTLER_ARCHIVE_REF_SELECTIONS=<JSON>` | Select 1–8 exact archive-ref objects in ordinary reconciliation |
+| `GITHUB_SETTLER_ARCHIVE_CENSUS_FILE=<path>` and `GITHUB_SETTLER_ARCHIVE_SELECTED_REFS=<JSON>` | Consume an original GHS census and observe only its selected sources |
+
+The original `reconcile-github` executable uses these settings with its existing
+configured owners, transport and receipt file. Omitted options preserve ordinary
+issue/PR polling. No inference service is called during any of these operations.
+
+### Consume existing archive census JSON
+
+`projectArchiveRefSelectionsFromCensus` reads the existing GitHub Engineering
+`github.archive-ref-census/v1`, either alone or in a report's single
+`sourceRefAssays` entry. Its `github.archive-ref-observation/v1` rows identify
+exact `repositoryId`, `repositoryFullName`, `refName`, `objectType`, and
+`objectSha` coordinates. Both `refs/tags/archive/*` and `refs/archive/*` are
+supported as distinct namespaces. This input is now consumed by the real
+reconciler rather than retained as an unconnected report.
+
+```sh
+GITHUB_SETTLER_OWNERS=red-cup-engineering \
+GITHUB_SETTLER_ARCHIVE_CENSUS_FILE=/path/to/ghs-report.json \
+GITHUB_SETTLER_ARCHIVE_SELECTED_REFS='["refs/archive/held-work"]' \
+  node scripts/reconcile-github.mjs
+```
+
+Census mode reads only the selected repository and exact refs. The collector
+makes two exact-ref reads plus two repository-identity reads for one selection;
+the executable first authenticates the selected repository against configured
+owners. It does not fetch unrelated issues or traverse a large archive family.
+Changed object targets, malformed identities, unknown selection fields,
+nonregular or oversized census files, and mixed observation scopes refuse
+before admission. The input file ceiling is 1 MiB.
+
+### Recover missed discussion edits
+
+The two repository-level comment lists retain comment identity, parent source,
+author, original body and observed timestamps. They avoid a request per issue
+or pull request. Distinct body edits remain distinct even with equal timestamps;
+an unchanged replay reuses the existing receipt. Duplicate entries, exhausted
+pagination, unavailable source permissions or foreign parent identities prevent
+a partial lot from being reported as complete. These lists cannot reconstruct
+edits GitHub no longer serves.
+
+GitHub reads are bounded observations with net-change checks, not an atomic
+snapshot. Archive naming and source custody do not establish acceptance of the
+contained code. The original native Work receiver still verifies actual
+readback and audience; a private source cannot enter its public route.
