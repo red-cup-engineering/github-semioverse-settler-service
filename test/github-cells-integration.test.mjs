@@ -116,7 +116,7 @@ test('the original native opening keeps its journal contract and returns Cells f
   let actual;
   const receipt = await receivePreparedGitHubWork({ prepared, call: async (verb, args) => {
     if (verb === 'work-open') { opened++; actual = nativeThread(prepared); return { id: actual.id }; }
-    if (args.source) return { position: 'before', threads: [], matched: 0 };
+    if (args.source) return { position: 'before', threads: [], refused: 0, matched: 0 };
     return { threads: [actual] };
   } });
   assert.equal(opened, 1);
@@ -133,7 +133,7 @@ test('native replay reconstructs the retained source Cells without writing anoth
   const actual = nativeThread(first);
   const call = async verb => {
     assert.equal(verb, 'work-board');
-    return { position: 'same', threads: [actual], matched: 1 };
+    return { position: 'same', threads: [actual], refused: 0, matched: 1 };
   };
   const before = await receivePreparedGitHubWork({ prepared: first, call });
   const again = prepareGitHubWork(request({ ...event(), delivery_id: 'redelivery' }));

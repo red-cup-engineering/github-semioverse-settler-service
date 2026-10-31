@@ -22,7 +22,7 @@ function board(source, readback = source) {
   return { calls, async call(verb, input) {
     calls.push({ verb, input });
     assert.equal(verb, 'work-board');
-    return input.source ? { position: 'fixed-source-snapshot', matched: source.length, threads: source } : { threads: readback };
+    return input.source ? { position: 'fixed-source-snapshot', refused: 0, matched: source.length, threads: source } : { threads: readback };
   } };
 }
 
@@ -87,7 +87,7 @@ test('independent: caller mutation while the board is awaited cannot change the 
   const result = await readPreparedGitHubWork({ prepared, call: async (verb, input) => {
     assert.equal(verb, 'work-board'); reads++;
     prepared.input.requirements = ['Mutated after capture'];
-    return input.source ? { position: 'same', matched: 1, threads: [original] } : { threads: [original] };
+    return input.source ? { position: 'same', refused: 0, matched: 1, threads: [original] } : { threads: [original] };
   } });
   assert.equal(result.state, 'NATIVE_RECEIVED');
   assert.equal(result.thread, original.id);

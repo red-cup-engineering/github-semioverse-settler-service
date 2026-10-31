@@ -30,10 +30,50 @@ const boardOnly = (sourceThreads, readback = sourceThreads) => {
     calls.push({ verb, input: structuredClone(input) });
     assert.equal(verb, 'work-board', 'GWR-1: a reader cannot perform a Work effect');
     return input.source
-      ? { position: 'source-position', matched: sourceThreads.length, threads: sourceThreads }
+      ? { position: 'source-position', refused: 0, matched: sourceThreads.length, threads: sourceThreads }
       : { threads: readback };
   } };
 };
+
+for (const refused of [16, 1, undefined, null, false, '0', -1, 0.5, []]) {
+  for (const receive of [readPreparedGitHubWork, receivePreparedGitHubWork]) {
+    test(`GWR-2: ${receive.name} refuses unqualified replay ${JSON.stringify(refused)} without opening Work`, async () => {
+      const prepared = prepareGitHubWork(request());
+      const verbs = [];
+      await assert.rejects(receive({ prepared, call: async verb => {
+        verbs.push(verb);
+        return { position: 'same', matched: 0, threads: [], refused };
+      } }), /refused or unqualified replay/);
+      assert.deepEqual(verbs, ['work-board']);
+    });
+  }
+}
+
+test('GWR-2: a visible exact original cannot conceal an unread duplicate in refused history', async () => {
+  const prepared = prepareGitHubWork(request());
+  for (const receive of [readPreparedGitHubWork, receivePreparedGitHubWork]) {
+    const inputs = [];
+    await assert.rejects(receive({ prepared, call: async (verb, input) => {
+      inputs.push({ verb, input });
+      return { position: 'same', matched: 1, refused: 1, threads: [stored(prepared)] };
+    } }), /refused or unqualified replay/);
+    assert.deepEqual(inputs, [{ verb: 'work-board', input: { source: prepared.envelope.source.url, full: true, limit: 20 } }]);
+  }
+});
+
+test('GWR-2: a refused later page cannot select an earlier exact original or open replacement Work', async () => {
+  const prepared = prepareGitHubWork(request());
+  for (const receive of [readPreparedGitHubWork, receivePreparedGitHubWork]) {
+    const verbs = [];
+    await assert.rejects(receive({ prepared, call: async (verb, input) => {
+      verbs.push(verb);
+      return input.after === undefined
+        ? { position: 'same', matched: 2, refused: 0, threads: [stored(prepared)], next: 'original-native-thread' }
+        : { position: 'same', matched: 2, refused: 1, threads: [{ ...stored(prepared), id: 'other' }] };
+    } }), /refused or unqualified replay/);
+    assert.deepEqual(verbs, ['work-board', 'work-board']);
+  }
+});
 
 test('GWR-1/4: absent original Work is an observation with source Cells and no receiving or Work claim', async () => {
   const input = request();
@@ -142,7 +182,7 @@ for (const [label, alter] of [
   ['invalid continuation', page => { page.matched = 2; page.next = 'wrong-cursor'; }],
 ]) test(`GWR-2: ${label} cannot establish absence or receiving`, async () => {
   const prepared = prepareGitHubWork(request());
-  const page = { position: 'one', matched: 1, threads: [stored(prepared)] };
+  const page = { position: 'one', refused: 0, matched: 1, threads: [stored(prepared)] };
   alter(page);
   await assert.rejects(readPreparedGitHubWork({ prepared, call: async verb => {
     assert.equal(verb, 'work-board');
@@ -157,8 +197,8 @@ test('GWR-2: changing source position refuses before any thread receipt', async 
     assert.equal(verb, 'work-board');
     pages++;
     return pages === 1
-      ? { position: 'first', matched: 2, threads: [stored(prepared)], next: 'original-native-thread' }
-      : { position: 'changed', matched: 2, threads: [{ ...stored(prepared), id: 'second' }] };
+      ? { position: 'first', refused: 0, matched: 2, threads: [stored(prepared)], next: 'original-native-thread' }
+      : { position: 'changed', refused: 0, matched: 2, threads: [{ ...stored(prepared), id: 'second' }] };
   } }), /changed while paging/);
   assert.equal(pages, 2);
 });
@@ -174,9 +214,9 @@ test('GWR-2/3: a complete later page can select the exact original Work', async 
     calls.push(input);
     if (input.thread) return { threads: [actual] };
     if (input.after === undefined)
-      return { position: 'same', matched: 2, threads: [unrelated], next: unrelated.id };
+      return { position: 'same', refused: 0, matched: 2, threads: [unrelated], next: unrelated.id };
     assert.equal(input.after, unrelated.id);
-    return { position: 'same', matched: 2, threads: [actual] };
+    return { position: 'same', refused: 0, matched: 2, threads: [actual] };
   } });
   assert.equal(result.thread, actual.id);
   assert.equal(calls.length, 3);
@@ -193,7 +233,7 @@ test('GWR-2: the bounded source scan cannot declare absence at its paging limit'
       opening: { sources: [{ locator: prepared.envelope.source.url }] },
     }));
     pages++;
-    return { position: 'same', matched: 1001, threads, next: threads.at(-1).id };
+    return { position: 'same', refused: 0, matched: 1001, threads, next: threads.at(-1).id };
   } }), /exceeded its complete paging bound/);
   assert.equal(pages, 50);
 });
@@ -267,7 +307,7 @@ test('GWR-6: a pending reader keeps its offered interpretation through caller mu
       prepared.input.scope.push('service:another');
       prepared.input.evidence.length = 0;
     }
-    return { position: 'same', matched: 1, threads: [actual] };
+    return { position: 'same', refused: 0, matched: 1, threads: [actual] };
   } });
   assert.equal(result.state, 'NATIVE_RECEIVED');
   assert.equal(result.sourceDocument, prepared.document.commitment);
