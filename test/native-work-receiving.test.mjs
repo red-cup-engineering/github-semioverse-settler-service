@@ -37,7 +37,7 @@ test('replay uses native source evidence without an opening or independent recei
   const receipt = await receivePreparedGitHubWork({ prepared, call: async (verb, args) => {
     calls.push(verb);
     assert.equal(verb, 'work-board');
-    return { position: 'one', threads: [actual], matched: 1 };
+    return { position: 'one', threads: [actual], refused: 0, matched: 1 };
   } });
   assert.deepEqual(calls, ['work-board', 'work-board']);
   assert.equal(receipt.thread, actual.id);
@@ -50,7 +50,7 @@ test('admission requires exact source readback; a dropped document is not a rece
   const prepared = prepareGitHubWork(input());
   await assert.rejects(receivePreparedGitHubWork({ prepared, call: async (verb, args) => {
     if (verb === 'work-open') return { id: 'native-thread' };
-    if (args.source) return { position: 'one', threads: [], matched: 0 };
+    if (args.source) return { position: 'one', threads: [], refused: 0, matched: 0 };
     return { threads: [{ ...stored(prepared), opening: { ...prepared.input, sources: [] } }] };
   } }), /did not retain/);
 });
@@ -58,7 +58,7 @@ test('admission requires exact source readback; a dropped document is not a rece
 test('an admitted source with the wrong home remains explicitly unrouted', async () => {
   const prepared = prepareGitHubWork(input());
   const actual = { ...stored(prepared), home: 'unrelated-service' };
-  const receipt = await receivePreparedGitHubWork({ prepared, call: async () => ({ position: 'one', threads: [actual], matched: 1 }) });
+  const receipt = await receivePreparedGitHubWork({ prepared, call: async () => ({ position: 'one', threads: [actual], refused: 0, matched: 1 }) });
   assert.equal(receipt.state, 'NATIVE_RECEIVED_UNROUTED');
   assert.equal(receipt.stages.routed, false);
 });
@@ -69,8 +69,8 @@ test('source selection drift refuses a speculative second opening', async () => 
   await assert.rejects(receivePreparedGitHubWork({ prepared, call: async verb => {
     assert.equal(verb, 'work-board');
     calls++;
-    return calls === 1 ? { position: 'one', matched: 2, threads: [{ id: 'old-source', opening: {sources:[{locator:prepared.envelope.source.url}]} }], next: 'old-source' }
-      : { position: 'changed', matched: 2, threads: [] };
+    return calls === 1 ? { position: 'one', refused: 0, matched: 2, threads: [{ id: 'old-source', opening: {sources:[{locator:prepared.envelope.source.url}]} }], next: 'old-source' }
+      : { position: 'changed', refused: 0, matched: 2, threads: [] };
   } }), /changed while paging/);
 });
 
@@ -89,7 +89,7 @@ for (const variant of ['property order', 'delivery retry']) {
     const originalLocator = actual.opening.sources[1].locator;
     const receipt = await receivePreparedGitHubWork({ prepared: next, call: async verb => {
       assert.equal(verb, 'work-board', 'unchanged provider observation must not create another native opening');
-      return { position: 'one', threads: [actual], matched: 1 };
+      return { position: 'one', threads: [actual], refused: 0, matched: 1 };
     } });
     assert.equal(receipt.replay, true);
     assert.equal(receipt.sourceDocument, first.document.commitment);
@@ -117,7 +117,7 @@ for (const variant of ['material', 'author', 'triggering actor', 'scope', 'inter
     let opens = 0;
     const receipt = await receivePreparedGitHubWork({ prepared: next, call: async (verb, args) => {
       if (verb === 'work-open') { opens++; return { id: admitted.id }; }
-      return args.source ? { position: 'one', threads: [prior], matched: 1 } : { threads: [admitted] };
+      return args.source ? { position: 'one', threads: [prior], refused: 0, matched: 1 } : { threads: [admitted] };
     } });
     assert.equal(opens, 1);
     assert.equal(receipt.replay, false);
@@ -133,7 +133,7 @@ test('native replay refuses corrupted stored evidence before a speculative openi
   actual.opening.sources[1].commitment = 'wrong';
   await assert.rejects(receivePreparedGitHubWork({ prepared, call: async verb => {
     assert.equal(verb, 'work-board');
-    return { position: 'one', threads: [actual], matched: 1 };
+    return { position: 'one', threads: [actual], refused: 0, matched: 1 };
   } }), /commitment mismatch/);
 });
 
@@ -146,7 +146,7 @@ test('native replay still requires exact readback of the original retained carri
   const substituted = stored(next);
   await assert.rejects(receivePreparedGitHubWork({ prepared: next, call: async (verb, args) => {
     assert.equal(verb, 'work-board');
-    return args.source ? { position: 'one', threads: [prior], matched: 1 } : { threads: [substituted] };
+    return args.source ? { position: 'one', threads: [prior], refused: 0, matched: 1 } : { threads: [substituted] };
   } }), /did not retain the exact source document/);
 });
 
@@ -156,7 +156,7 @@ test('native replay compares the offered document snapshot after nested input mu
   prepared.envelope.material.user.login = 'mutated-after-prepare';
   const receipt = await receivePreparedGitHubWork({ prepared, call: async verb => {
     assert.equal(verb, 'work-board');
-    return { position: 'one', threads: [actual], matched: 1 };
+    return { position: 'one', threads: [actual], refused: 0, matched: 1 };
   } });
   assert.equal(receipt.replay, true);
   assert.equal(readGitHubSourceDocument(actual.opening.sources[1]).material.user.login, 'customer');
@@ -171,7 +171,7 @@ test('native replay snapshots retained carrier identity before asynchronous read
   await assert.rejects(receivePreparedGitHubWork({ prepared, call: async (verb, args) => {
     assert.equal(verb, 'work-board');
     if (!args.source) Object.assign(actual.opening.sources[1], substituted);
-    return { position: 'one', threads: [actual], matched: 1 };
+    return { position: 'one', threads: [actual], refused: 0, matched: 1 };
   } }), /did not retain the exact source document/);
 });
 
@@ -182,25 +182,25 @@ for (const [label, alter] of [
   ['invalid continuation', page=>{page.matched=2;page.next='other'}],
 ]) test(`source selection refuses ${label} before opening`,async()=>{
   const prepared=prepareGitHubWork(input());let writes=0;
-  const page={position:'one',matched:1,threads:[stored(prepared)]};alter(page);
+  const page={position:'one',refused: 0, matched:1,threads:[stored(prepared)]};alter(page);
   await assert.rejects(receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return page;}}),/source selection/);
   assert.equal(writes,0);
 });
 test('native set normalization of scope preserves unchanged replay',async()=>{
  const request=input();request.binding.scope=['service:z','section:services/engineering'];
  const prepared=prepareGitHubWork(request),actual=stored(prepared);actual.opening.scope=[...actual.opening.scope].sort();let writes=0;
- const receipt=await receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return {position:'one',matched:1,threads:[actual]};}});
+ const receipt=await receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return {position:'one',refused: 0, matched:1,threads:[actual]};}});
  assert.equal(receipt.replay,true);assert.equal(writes,0);
 });
 test('same-condition report cannot pretend changed context was retained by corroboration',async()=>{
  const request=input();request.opening={...request.opening,law:'github-issue-open',subject:request.event.issue.html_url,context:'Original interpretation'};
  const prior=stored(prepareGitHubWork(request));request.opening.context='Changed interpretation';const prepared=prepareGitHubWork(request);let writes=0;
- await assert.rejects(receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return {position:'one',matched:1,threads:[prior]};}}),/cannot retain changed interpretation/);
+ await assert.rejects(receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return {position:'one',refused: 0, matched:1,threads:[prior]};}}),/cannot retain changed interpretation/);
  assert.equal(writes,0);
 });
 for(const field of ['context','tags'])test(`same-condition report cannot silently remove fixed ${field}`,async()=>{
  const request=input();request.opening={...request.opening,law:'github-issue-open',subject:request.event.issue.html_url,context:'Original context',tags:['original']};const prior=stored(prepareGitHubWork(request));delete request.opening[field];const prepared=prepareGitHubWork(request);let writes=0;
- await assert.rejects(receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return {position:'one',matched:1,threads:[prior]};}}),/cannot retain changed interpretation/);assert.equal(writes,0);
+ await assert.rejects(receivePreparedGitHubWork({prepared,call:async verb=>{if(verb!=='work-board')writes++;return {position:'one',refused: 0, matched:1,threads:[prior]};}}),/cannot retain changed interpretation/);assert.equal(writes,0);
 });
 
 test('a snapshot without a sender is admitted and exact replay does not open again', async () => {
@@ -217,7 +217,7 @@ test('a snapshot without a sender is admitted and exact replay does not open aga
       return { id: actual.id };
     }
     assert.equal(verb, 'work-board');
-    return { position: 'one', threads: actual ? [actual] : [], matched: actual ? 1 : 0 };
+    return { position: 'one', threads: actual ? [actual] : [], refused: 0, matched: actual ? 1 : 0 };
   };
   const admitted = await receivePreparedGitHubWork({ prepared, call });
   assert.equal(admitted.replay, false);
@@ -257,7 +257,7 @@ test('removing an authored source requirement or tag is a new interpretation, no
       call: async (verb, args) => {
         if (verb === 'work-open') { opens++; return { id: newThread.id }; }
         return args.source
-          ? { position: 'source-position', matched: 1, threads: [stored(initial)] }
+          ? { position: 'source-position', refused: 0, matched: 1, threads: [stored(initial)] }
           : { threads: [newThread] };
       },
     });
@@ -275,7 +275,7 @@ test('two native Work threads with the same provider material cannot be silently
     prepared,
     call: async (verb) => {
       assert.equal(verb, 'work-board', 'source ambiguity must not trigger another Work opening');
-      return { position: 'same', matched: 2, threads: [first, second] };
+      return { position: 'same', refused: 0, matched: 2, threads: [first, second] };
     },
   }), /ambiguous exact receiving threads/);
 });
@@ -297,7 +297,7 @@ test('native Work feedback is read from the same original thread without claimin
   const call = async (verb, args) => {
     if (verb === 'work-open') { opens++; throw new Error('source already recorded'); }
     assert.equal(verb, 'work-board');
-    return { position: 'one', matched: 1, threads: [current] };
+    return { position: 'one', refused: 0, matched: 1, threads: [current] };
   };
 
   const opened = await receivePreparedGitHubWork({ prepared, call });
@@ -327,7 +327,7 @@ test('accepted-looking Work standing without an observed accepted delivery is no
   const prepared = prepareGitHubWork(input());
   const actual = { ...stored(prepared), standing: 'accepted', deliveries: [] };
   const receipt = await receivePreparedGitHubWork({ prepared, call: async () =>
-    ({ position: 'one', matched: 1, threads: [actual] }) });
+    ({ position: 'one', refused: 0, matched: 1, threads: [actual] }) });
   assert.equal(receipt.nativeWork.standing, 'accepted');
   assert.equal(receipt.nativeWork.assayerReadout, 'no-received-delivery');
   assert.equal(receipt.nativeWork.deliveries.accepted, 0);

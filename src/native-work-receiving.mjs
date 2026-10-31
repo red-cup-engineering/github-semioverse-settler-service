@@ -153,6 +153,11 @@ export async function readGitHubSourceThreads(call, source) {
   let after, position, expected; const seen = new Set(), threads = [];
   for (let page = 0; page < 50; page++) {
     const selected = await call('work-board', { source, full: true, limit: 20, ...(after === undefined ? {} : { after }) });
+    // A refused native move can hide the original source thread. Neither a
+    // matching row nor matched:0 proves complete receiving while replay is
+    // incomplete. Require the original source-page refusal count on EVERY page;
+    // missing/malformed evidence is unknown, never permission to open again.
+    if (selected?.refused !== 0) throw new Error('native source selection has refused or unqualified replay; original Work reconciliation is required');
     if (!Array.isArray(selected?.threads) || selected.threads.length > 20 || typeof selected.position !== 'string' || !Number.isSafeInteger(selected.matched) || selected.matched < 0) throw new Error('native source selection is incomplete');
     if (position !== undefined && (selected.position !== position || selected.matched !== expected)) throw new Error('native source selection changed while paging');
     position = selected.position; expected = selected.matched;

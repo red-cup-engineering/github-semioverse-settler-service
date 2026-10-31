@@ -480,7 +480,7 @@ test('all four activity families reach the existing native Work reader and repla
       if (input.source && actual)
         assert.ok(actual.opening.sources.some(source => source.locator === input.source));
       if (input.thread) assert.equal(input.thread, actual.id);
-      return { position: 'original-board-position', threads: actual ? [actual] : [], matched: actual ? 1 : 0 };
+      return { position: 'original-board-position', threads: actual ? [actual] : [], refused: 0, matched: actual ? 1 : 0 };
     };
     const first = await receivePreparedGitHubWork({ prepared, call });
     assert.equal(first.state, 'NATIVE_RECEIVED');
