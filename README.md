@@ -27,7 +27,8 @@ do not migrate old metadata-only receipts as evidence of complete admission.
 ## Source provenance contract
 
 For issue #1's provider provenance requirement, `source.author`/`authorId`
-identify the material's `object.user`. `source.actor`/`actorId` identify only
+identify the material's `object.user`, a release's `author`, or a deployment
+status's `creator`. `source.actor`/`actorId` identify only
 the supplied webhook `sender`, the triggering actor. A repository snapshot
 does not identify who triggered the observed change: polling omits `sender`,
 so both actor fields remain null. The authenticated polling observer is a
@@ -58,6 +59,49 @@ qualified HTTP admission. This requires one new receipt for an already observed
 source when the upgraded HTTP path is first used; reconcile actual native Work
 through its original retained source/thread as before. No receipt is deleted or
 relabelled, and the change does not repair previously lost source evidence.
+
+## Release, deployment, status and push observations
+
+The original normalizer, Cell projector and native Work receiver share one
+provider contract for these activity families:
+
+| Provider activity | Retained identity and evidence |
+| --- | --- |
+| Release | Release ID, complete release material and author, tag, declared `target_commitish`, draft/prerelease and publication timestamp. A symbolic target remains symbolic. |
+| Deployment status | Status ID and material, creator, exact same-repository deployment relation, observed deployment candidate and ref, and the status's environment. A related workflow or check does not replace the status. |
+| Commit status | Status ID, context, state, exact candidate and complete top-level status material. An expanded commit must name that same candidate. |
+| Push | Qualified full ref, before/after IDs, commits, pusher and creation/deletion/force evidence. The stable subject is the same ref subject used by polling; the transition retains its own observation. |
+
+Push creation/deletion admits a zero before/after ID only with the matching
+Boolean evidence. An annotated tag's target and expanded `head_commit` remain
+separate source observations. No push grants a ref deletion, Work closure or
+deployment effect. Provider success does not establish Group acceptance.
+
+Activity-specific API locators pass the existing Work preparation boundary only
+when they match admitted provider coordinates. Releases use their exact API ID
+locator; optional HTML links remain source presentation. A commit-status
+collection locates the provider source while the retained ID and material
+identify the exact status; there is no invented status-by-ID endpoint. A deleted
+ref's locator names the observed ref without asserting that it still exists.
+Deployment parent fields are retained provenance, not authentication of GitHub
+or independent proof of installation. A status may change its environment;
+missing status-environment evidence remains unknown rather than inheriting the
+original deployment's environment.
+
+Unknown activity fields refuse before a durable claim or transport. A repository
+object is context on most webhooks and cannot make unsupported activity count as
+a successfully received repository update. This is bounded codec coverage, not
+complete GitHub event coverage. Polling coverage remains its separately declared
+issue/PR, discussion and ref selection; this change does not add poll requests.
+
+All four families reuse the original source/Work Cells, native opening, read-only
+Work recovery and replay receipts. The same public-audience binding governs
+native Work admission. Draft releases remain private even in public repositories;
+missing draft evidence gives an unknown audience, which the public Work route
+refuses. Previously misclassified receipts cannot establish receipt of corrected
+typed material, and lost historical events require original provider evidence.
+See [the source contract](specifications/github-cells.md) and
+`test/github-activity-independent.test.mjs` for receiving cases.
 
 ## Reconciliation preserves each observed source revision
 

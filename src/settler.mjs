@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { assertGitHubEnvelope, canonicalGitHubValue as canonical, revisionFor, objectIdentityFor,
-  admitGitHubRefMaterial, gitHubRefLocator } from './github-envelope.mjs';
+  admitGitHubRefMaterial, gitHubRefLocator, admitGitHubActivityMaterial,
+  gitHubActivityLocator } from './github-envelope.mjs';
 export { admitGitHubRefName, gitHubRefLocator } from './github-envelope.mjs';
 import { projectGitHubCells } from './github-cells.mjs';
 
@@ -9,7 +10,19 @@ const REQUIRED = (value, name) => {
   return value.trim();
 };
 
+// These are source/transport context, never a substitute activity object. Keep
+// every other field of GitHub's top-level push and commit-status payloads.
+const contextKeys = new Set(['repository', 'sender', 'installation', 'organization',
+  'enterprise', 'delivery_id', 'occurred_at', 'action']);
+const topLevelMaterial = event => Object.fromEntries(Object.entries(event)
+  .filter(([key]) => !contextKeys.has(key)));
+const has = (event, key) => Object.hasOwn(event, key);
+
 const objectFor = (event) => {
+  // A deployment-status webhook can also include its deployment, check and
+  // workflow. Those are related observations, not the object that changed.
+  if (has(event, 'deployment_status')) return ['deployment_status', event.deployment_status];
+  if (has(event, 'release')) return ['release', event.release];
   // Comments and reviews are distinct provider objects even when the webhook
   // includes their parent issue or PR. Selecting the parent loses their identity.
   if (event.comment) {
@@ -35,9 +48,30 @@ const objectFor = (event) => {
   if (event.merge_group) return ['merge_group', event.merge_group];
   if (event.deployment) return ['deployment', event.deployment];
   if (event.git_ref) return ['git_ref', event.git_ref];
-  if (event.repository) return ['repository', event.repository];
+  if (['ref', 'before', 'after', 'commits', 'head_commit'].some(key => has(event, key)))
+    return ['push', topLevelMaterial(event)];
+  if (['context', 'sha', 'commit', 'target_url'].some(key => has(event, key)))
+    return ['status', topLevelMaterial(event)];
+  // A repository is context on nearly every webhook. Unknown activity must
+  // refuse before a receipt/effect, rather than erase its payload and appear
+  // successfully received as a repository update. 'changes' is provider-owned
+  // repository edit context; the selected repository snapshot remains material.
+  if (event.repository && Object.keys(event).every(key => contextKeys.has(key) || key === 'changes'))
+    return ['repository', event.repository];
   throw new TypeError('unsupported GitHub event object');
 };
+
+function deploymentParent(event) {
+  const deployment = event.deployment;
+  if (!deployment || !Number.isSafeInteger(deployment.id) || deployment.id <= 0 ||
+      deployment.url !== `https://api.github.com/repos/${event.repository.full_name}/deployments/${deployment.id}`)
+    throw new TypeError('GitHub deployment status needs its original same-repository deployment');
+  return Object.freeze({
+    objectType: 'deployment', objectId: String(deployment.node_id ?? deployment.id),
+    objectNumber: null, url: deployment.url, headSha: deployment.sha,
+    ref: deployment.ref ?? null, environment: deployment.environment ?? null,
+  });
+}
 
 // Reuse the normalizer's canonical byte ordering for CloudEvent source identity.
 export { canonical as canonicalGitHubValue };
@@ -117,6 +151,8 @@ export function normalizeGitHubEvent(event) {
   }
   const [objectType, object] = objectFor(event);
   if (objectType === 'git_ref') admitGitHubRefMaterial(object);
+  const deployment = objectType === 'deployment_status' ? deploymentParent(event) : null;
+  admitGitHubActivityMaterial(objectType, object, { repositoryFullName: repo.full_name, parent: deployment });
   const objectId = objectIdentityFor(objectType, object);
   if (objectId === undefined || objectId === null || !String(objectId).trim()) throw new TypeError('provider object identity is required');
   const revision = revisionFor(objectType, object, event);
@@ -131,8 +167,16 @@ export function normalizeGitHubEvent(event) {
   const eventKey = `${providerObjectKey}:revision:${String(revision)}:action:${action}:material:${materialIdentity}`;
   const body = object.body ?? '';
   const fields = machineFields(body);
-  const occurredAt = object.updated_at ?? object.submitted_at ?? object.created_at ?? event.occurred_at ?? null;
+  const occurredAt = object.updated_at ?? object.submitted_at ?? object.published_at ?? object.created_at ??
+    event.occurred_at ?? null;
   const parent = event.comment || event.review ? event.pull_request ?? event.issue : null;
+  const author = objectType === 'release' ? object.author :
+    objectType === 'deployment_status' ? object.creator : object.user;
+  const activityLocator = gitHubActivityLocator(objectType, object, repo.full_name);
+  // Public repository metadata does not make an unpublished draft public.
+  // Missing draft evidence cannot establish the public native Work audience.
+  const visibility = repo.private === true || objectType === 'release' && object.draft === true ? 'private' :
+    repo.private === false && (objectType !== 'release' || object.draft === false) ? 'public' : 'unknown';
 
   return Object.freeze({
     schema: 'semioverse.github-delta.v1',
@@ -149,13 +193,13 @@ export function normalizeGitHubEvent(event) {
       revision: String(revision),
       actor: event.sender?.login ?? null,
       actorId: event.sender?.node_id ?? event.sender?.id ?? null,
-      author: object.user?.login ?? null,
-      authorId: object.user?.node_id ?? object.user?.id ?? null,
-      visibility: repo.private === true ? 'private' : repo.private === false ? 'public' : 'unknown',
+      author: author?.login ?? null,
+      authorId: author?.node_id ?? author?.id ?? null,
+      visibility,
       occurredAt,
       deliveryId: event.delivery_id ?? null,
-      url: objectType === 'git_ref' ? gitHubRefLocator(repo.full_name, object.ref) : object.html_url ?? repo.html_url ?? null,
-      ...(parent ? { parent: Object.freeze({
+      url: activityLocator ?? (objectType === 'git_ref' ? gitHubRefLocator(repo.full_name, object.ref) : object.html_url ?? repo.html_url ?? null),
+      ...(deployment ? { parent: deployment } : parent ? { parent: Object.freeze({
         objectType: event.pull_request || parent.pull_request ? 'pull_request' : 'issue',
         objectId: String(parent.node_id ?? parent.id ?? parent.number),
         objectNumber: parent.number ?? null,

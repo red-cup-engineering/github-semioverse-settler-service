@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { gitHubRefLocator, normalizeGitHubEvent } from './settler.mjs';
+import { gitHubActivityLocator } from './github-envelope.mjs';
 import { projectGitHubCells, projectGitHubWorkCells } from './github-cells.mjs';
 
 const MEDIA = 'data:application/json;base64,';
@@ -127,7 +128,10 @@ export function prepareGitHubWork({ event, opening, binding }) {
   const locator = envelope.source.url;
   const exactRefLocator = envelope.source.objectType === 'git_ref' &&
     locator === gitHubRefLocator(envelope.source.repositoryFullName, envelope.source.objectId);
-  if (typeof locator !== 'string' || !(locator.startsWith('https://github.com/') || exactRefLocator))
+  const activityLocator = gitHubActivityLocator(envelope.source.objectType, envelope.material,
+    envelope.source.repositoryFullName);
+  const exactActivityLocator = activityLocator !== null && locator === activityLocator;
+  if (typeof locator !== 'string' || !(locator.startsWith('https://github.com/') || exactRefLocator || exactActivityLocator))
     throw new TypeError('original GitHub locator is required');
   const document = gitHubSourceDocument(envelope);
   const sourceCells = projectGitHubCells(envelope);
