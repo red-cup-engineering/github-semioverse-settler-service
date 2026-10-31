@@ -1,6 +1,6 @@
 {
   "name": "@red-cup-engineering/github-semioverse-settler-service",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": false,
   "type": "module",
   "description": "Deterministic GitHub delta normalization with replay-safe MetroPlat CloudEvents HTTP receiving or signed ActivityPub++ Actor submission pending native readback.",
