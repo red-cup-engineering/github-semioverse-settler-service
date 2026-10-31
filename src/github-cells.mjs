@@ -25,6 +25,13 @@ export const GITHUB_CELL_PREDICATES = Object.freeze({
   checkConclusion: 'github.check-conclusion', checkHead: 'github.check-head',
   checkApp: 'github.check-app',
   refName: 'git.ref-name', gitObjectType: 'git.object-type', gitObjectId: 'git.object-id',
+  before: 'git.before', after: 'git.after', created: 'git.created',
+  deleted: 'git.deleted', forced: 'git.forced',
+  statusState: 'github.status-state', statusContext: 'github.status-context', statusHead: 'github.status-head',
+  releaseTag: 'github.release-tag', releaseTarget: 'github.release-target',
+  releasePrerelease: 'github.release-prerelease', releasePublishedAt: 'github.release-published-at',
+  deploymentState: 'github.deployment-state', deploymentTarget: 'github.deployment-target',
+  deploymentRef: 'github.deployment-ref', deploymentEnvironment: 'github.deployment-environment',
 });
 
 export const WORK_CELL_PREDICATES = Object.freeze({
@@ -48,6 +55,9 @@ const providerTimestamp = value => {
 
 function primarySubject(envelope) {
   const { source, material } = envelope;
+  // A push observes a transition of the same ref that polling observes as a
+  // Git ref snapshot. Preserve their distinct provider/material observations.
+  if (source.objectType === 'push') return `github:repo:${source.repositoryId}:git_ref:${material.ref}`;
   if (!issueOrPull(source.objectType)) return envelope.providerObjectKey;
   const number = source.objectNumber ?? material.number;
   if (!positiveInteger(number) || (present(material.number) && material.number !== number))
@@ -62,6 +72,8 @@ function primarySubject(envelope) {
 function parentSubject(envelope) {
   const { source, material } = envelope;
   const parent = source.parent;
+  if (source.objectType === 'deployment_status')
+    return `github:repo:${source.repositoryId}:deployment:${parent.objectId}`;
   const locator = parent?.url ?? material.pull_request_url ?? material.issue_url;
   let fromUrl;
   if (typeof locator === 'string') {
@@ -139,6 +151,32 @@ export function projectGitHubCells(input) {
     fact(P.gitObjectType, material.object.type, 'material.object.type');
     fact(P.gitObjectId, material.object.sha, 'material.object.sha');
   }
+  if (source.objectType === 'push') {
+    fact(P.refName, material.ref, 'material.ref');
+    fact(P.before, material.before, 'material.before');
+    fact(P.after, material.after, 'material.after');
+    for (const key of ['created', 'deleted', 'forced'])
+      boolean(P[key], [[`material.${key}`, material[key]]]);
+  }
+  if (source.objectType === 'status') {
+    fact(P.statusState, material.state, 'material.state');
+    fact(P.statusContext, material.context, 'material.context');
+    fact(P.statusHead, material.sha, 'material.sha');
+  }
+  if (source.objectType === 'release') {
+    fact(P.releaseTag, material.tag_name, 'material.tag_name');
+    fact(P.releaseTarget, material.target_commitish, 'material.target_commitish');
+    fact(P.releasePublishedAt, material.published_at, 'material.published_at');
+    boolean(P.releasePrerelease, [['material.prerelease', material.prerelease]]);
+  }
+  if (source.objectType === 'deployment_status') {
+    fact(P.deploymentState, material.state, 'material.state');
+    fact(P.deploymentTarget, source.parent.headSha, 'source.parent.headSha');
+    fact(P.deploymentRef, source.parent.ref, 'source.parent.ref');
+    // A status can change environment; omission may inherit a preceding status,
+    // not the original deployment. Preserve that parent's evidence separately.
+    fact(P.deploymentEnvironment, material.environment, 'material.environment');
+  }
   if (present(source.author) || present(source.authorId))
     fact(P.author, { login: source.author ?? null, id: source.authorId ?? null });
   if (present(source.actor) || present(source.actorId))
@@ -153,7 +191,7 @@ export function projectGitHubCells(input) {
     source.objectType === 'issue' && material.pull_request && typeof material.pull_request === 'object';
   boolean(P.open, lifecycle && ['open', 'closed'].includes(material.state)
     ? [['material.state', material.state === 'open']] : []);
-  boolean(P.draft, pull ? [['material.draft', material.draft]] : []);
+  boolean(P.draft, pull || source.objectType === 'release' ? [['material.draft', material.draft]] : []);
   boolean(P.mergeable, pull ? [['material.mergeable', material.mergeable]] : []);
   const merged = [];
   if (pull) {

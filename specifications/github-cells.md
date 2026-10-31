@@ -50,6 +50,12 @@ nor repository owner/name is the canonical stable issue/PR coordinate.
 | GH-CELL-09 | Representation qualification occurs before a durable claim, native opening or transport effect. | Invalid source causes zero effects; pending port receives immutable snapshot |
 | GH-CELL-10 | HTTP deduplication binds complete source provenance; legacy metadata receipts keep their original meaning. | Changed actor reaches HTTP once, unchanged retry reuses it, old receipt remains |
 | GH-CELL-11 | Export uses the existing SignCell CloudEvents codec and deterministic occurrence identities. | Decode every native claim and recover the original Cell-set identity |
+| GH-CELL-12 | Release, deployment-status, commit-status and push activity retain their own provider identity and material; repository and related parent/check/workflow context cannot replace the changed object. | Realistic provider-shape fixtures and unchanged-repository/changed-release case |
+| GH-CELL-13 | A push transition and a polled ref share the repository-ID/full-ref subject while retaining distinct source observations. Before/after IDs and creation/deletion/force testimony remain explicit. | Cross-route subject equality; create/delete zero-ID controls; annotated tag case |
+| GH-CELL-14 | Commit status retains the exact candidate and context. Deployment status retains its same-repository parent relation and observed candidate; its environment comes from the status, with omission unknown. A release's symbolic target is not a resolved commit. | Conflicting candidate, foreign/changed parent locator, changed/missing status environment and symbolic target cases |
+| GH-CELL-15 | Unknown activity refuses before any durable or transport effect; only repository-only provider context can select a repository observation. | Unsupported and incomplete event inputs with a zero-effect oracle |
+| GH-CELL-16 | These activity families use the original native Work opening, readback and read-only recovery; replay resolves the original thread. API locators must match admitted provider coordinates. | Source → Cells → existing Work receiver → WorkCells → replay/read-only recovery for each family |
+| GH-CELL-17 | Public repository visibility does not expose draft releases. Known drafts are private, missing draft evidence leaves audience unknown, and neither admits public native Work. | Public-repository draft and absent-draft cases; forged-public envelope refusal |
 
 ## Refinement and effect allocation
 
@@ -84,6 +90,17 @@ New check-run, check-suite and merge-group event kinds preserve their own
 provider/candidate identity. Parent observations now retain explicit issue/PR
 kind; old source documents retain the evidence they actually carried.
 
+Release, deployment-status, commit-status and push observations extend the same
+v1 envelope. Their source-specific material admission is shared by webhook
+normalization and envelope readmission. A deployment-status parent retains
+observed provenance; matching coordinates do not authenticate that parent or
+prove installation. The same exact provider locator derivation is used by the
+native Work boundary, including the release-by-ID route, commit-status collection and historical
+deleted-ref locators. These source observations do not expand native Work's
+public-audience admission or grant an effect. Old repository/deployment-only
+receipts preserve what they observed; they are not receipts for previously
+discarded release, status or push material.
+
 HTTP receipt keys use `cloudevent:github-delta:<full-source-NI>`. Existing raw
 event-key receipts remain stored but cannot establish receipt of complete or
 corrected provenance. The first upgraded HTTP use may therefore create one new
@@ -103,4 +120,8 @@ receiving conditions.
 - [GitHub pull requests API](https://docs.github.com/en/rest/pulls/pulls): merge facts and synthetic pre-merge commit identity.
 - [GitHub webhook best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks): event/action selection and redelivery identity.
 - [GitHub merge queues](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue): candidate-specific merge-group checks.
+- [GitHub webhook payloads](https://docs.github.com/en/webhooks/webhook-events-and-payloads): release, deployment-status, top-level commit-status and push object shapes and related context.
+- [GitHub commit statuses](https://docs.github.com/en/rest/commits/statuses): candidate-scoped status collection, state and context.
+- [GitHub releases](https://docs.github.com/en/rest/releases/releases): release-by-ID identity and restricted draft visibility.
+- [GitHub deployment statuses](https://docs.github.com/en/rest/deployments/statuses): status-specific environment changes and inheritance.
 - [CloudEvents specification](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md): occurrence identity and standard structured event context; implemented by the selected SignCell owner.
