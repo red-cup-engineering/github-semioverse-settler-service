@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareGitHubWork, readGitHubSourceDocument, receivePreparedGitHubWork } from '../src/native-work-receiving.mjs';
+import { prepareGitHubWork, readGitHubSourceDocument, readPreparedGitHubWork, receivePreparedGitHubWork } from '../src/native-work-receiving.mjs';
 
 const input = () => ({
   event: { repository: { id: 7, full_name: 'house/site', private: false }, action: 'observed', issue: { id: 9, node_id: 'issue9', number: 2, user: { id: 3, login: 'customer' }, title: 'Complaint', body: 'Original customer words', updated_at: '2026-10-06T20:00:00Z', html_url: 'https://github.com/house/site/issues/2' } },
@@ -51,7 +51,7 @@ test('admission requires exact source readback; a dropped document is not a rece
   await assert.rejects(receivePreparedGitHubWork({ prepared, call: async (verb, args) => {
     if (verb === 'work-open') return { id: 'native-thread' };
     if (args.source) return { position: 'one', threads: [], refused: 0, matched: 0 };
-    return { threads: [{ ...stored(prepared), opening: { ...prepared.input, sources: [] } }] };
+    return { threads: [{ ...stored(prepared), opening: { ...prepared.input, sources: [] } }], refused: [] };
   } }), /did not retain/);
 });
 
@@ -117,7 +117,7 @@ for (const variant of ['material', 'author', 'triggering actor', 'scope', 'inter
     let opens = 0;
     const receipt = await receivePreparedGitHubWork({ prepared: next, call: async (verb, args) => {
       if (verb === 'work-open') { opens++; return { id: admitted.id }; }
-      return args.source ? { position: 'one', threads: [prior], refused: 0, matched: 1 } : { threads: [admitted] };
+      return args.source ? { position: 'one', threads: [prior], refused: 0, matched: 1 } : { threads: [admitted], refused: [] };
     } });
     assert.equal(opens, 1);
     assert.equal(receipt.replay, false);
@@ -146,7 +146,7 @@ test('native replay still requires exact readback of the original retained carri
   const substituted = stored(next);
   await assert.rejects(receivePreparedGitHubWork({ prepared: next, call: async (verb, args) => {
     assert.equal(verb, 'work-board');
-    return args.source ? { position: 'one', threads: [prior], refused: 0, matched: 1 } : { threads: [substituted] };
+    return args.source ? { position: 'one', threads: [prior], refused: 0, matched: 1 } : { threads: [substituted], refused: [] };
   } }), /did not retain the exact source document/);
 });
 
@@ -258,7 +258,7 @@ test('removing an authored source requirement or tag is a new interpretation, no
         if (verb === 'work-open') { opens++; return { id: newThread.id }; }
         return args.source
           ? { position: 'source-position', refused: 0, matched: 1, threads: [stored(initial)] }
-          : { threads: [newThread] };
+          : { threads: [newThread], refused: [] };
       },
     });
     assert.equal(opens, 1, 'removed terms must not inherit older native Work identity');
@@ -370,4 +370,42 @@ test('branch and tag source selectors retain distinct GitHub ref identities in n
   assert.equal(readGitHubSourceDocument(branch.document).source.objectId,
     'refs/heads/feat/an#issue');
   assert.equal(branch.input.sources[1].kind, 'github-source-document');
+});
+
+test('a Koios-like empty source page with sixteen refused records is not absence of Work', async () => {
+  const prepared = prepareGitHubWork(input());
+  let writes = 0;
+  await assert.rejects(readPreparedGitHubWork({ prepared, call: async (verb) => {
+    if (verb !== 'work-board') writes++;
+    return {position:'position-with-unreplayed-source',threads:[],matched:0,refused:16};
+  }}), /refused or unqualified replay/);
+  assert.equal(writes,0,'source observation must not open a substitute task');
+});
+
+for(const [name,refused] of [
+  ['sixteen refused source moves',16],
+  ['one refused exact thread move',[{move:{thread:'native-thread',move:'reject'},reason:'unreceived provider evidence'}]],
+  ['omitted refusal proof',undefined],
+  ['malformed refusal proof','0'],
+  ['negative refusal count',-1],
+]) test(`exact accepted-looking Work readback cannot hide ${name}`,async()=>{
+  const prepared=prepareGitHubWork(input()),actual=stored(prepared),verbs=[];
+  await assert.rejects(readPreparedGitHubWork({prepared,call:async (verb,args)=>{
+    verbs.push(verb);
+    if(args.source)return {position:'source-cut',matched:1,refused:0,threads:[actual]};
+    return {position:'source-cut',matched:1,threads:[actual],...(refused===undefined?{}:{refused})};
+  }}),/native exact Work readback.*refus|native exact Work readback.*unqualified/);
+  assert.deepEqual(verbs,['work-board','work-board'],'a read cannot mutate the original Work');
+});
+
+test('complete native Work source and exact target readback remain qualified when no move was refused',async()=>{
+  const prepared=prepareGitHubWork(input()),actual=stored(prepared),verbs=[];
+  const received=await readPreparedGitHubWork({prepared,call:async(verb,args)=>{
+    verbs.push(verb);
+    return {position:'source-cut',matched:1,refused:args.source?0:[],threads:[actual]};
+  }});
+  assert.equal(received.state,'NATIVE_RECEIVED');
+  assert.equal(received.thread,actual.id);
+  assert.deepEqual(verbs,['work-board','work-board']);
+  assert.equal(received.stages.accepted,false,'source intake is not recipient acceptance');
 });

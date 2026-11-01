@@ -221,6 +221,14 @@ async function readSelectedGitHubWork({ selection, admitted, call }) {
   const thread = admitted?.thread ?? admitted?.id;
   if (typeof thread !== 'string' || !thread) throw new Error('native admission did not identify its thread');
   const readback = await call('work-board', { thread, full: true, limit: 1 });
+  // The source-list receipt and the exact thread readback are independent
+  // witness boundaries. A replay-refused (or unqualified) exact reading must
+  // never turn an otherwise present thread into a NATIVE_RECEIVED receipt.
+  // The original native board exposes zero refusals as [] on exact-thread
+  // reads; bounded source-list callers may also provide the historical 0.
+  const refused = readback?.refused;
+  if (!(refused === 0 || (Array.isArray(refused) && refused.length === 0)))
+    throw new Error('native exact Work readback has refused or unqualified replay; original Work reconciliation is required');
   const actual = readback?.threads?.find(item => item.id === thread);
   if (!actual?.opening) throw new Error('native admission has no complete receiving readback');
   const receivedEvidence = reportEvidenceDocuments(actual).find(({document: source,entry}) => source.commitment === retainedDocument.commitment && source.locator === retainedDocument.locator && evidenceEqual(input.evidence, entry.evidence));

@@ -31,7 +31,7 @@ const boardOnly = (sourceThreads, readback = sourceThreads) => {
     assert.equal(verb, 'work-board', 'GWR-1: a reader cannot perform a Work effect');
     return input.source
       ? { position: 'source-position', refused: 0, matched: sourceThreads.length, threads: sourceThreads }
-      : { threads: readback };
+      : { threads: readback, refused: [] };
   } };
 };
 
@@ -212,7 +212,7 @@ test('GWR-2/3: a complete later page can select the exact original Work', async 
   const result = await readPreparedGitHubWork({ prepared, call: async (verb, input) => {
     assert.equal(verb, 'work-board');
     calls.push(input);
-    if (input.thread) return { threads: [actual] };
+    if (input.thread) return { threads: [actual], refused: [] };
     if (input.after === undefined)
       return { position: 'same', refused: 0, matched: 2, threads: [unrelated], next: unrelated.id };
     assert.equal(input.after, unrelated.id);
