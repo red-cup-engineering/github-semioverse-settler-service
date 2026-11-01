@@ -51,7 +51,7 @@ test('admission requires exact source readback; a dropped document is not a rece
   await assert.rejects(receivePreparedGitHubWork({ prepared, call: async (verb, args) => {
     if (verb === 'work-open') return { id: 'native-thread' };
     if (args.source) return { position: 'one', threads: [], refused: 0, matched: 0 };
-    return { threads: [{ ...stored(prepared), opening: { ...prepared.input, sources: [] } }] };
+    return { threads: [{ ...stored(prepared), opening: { ...prepared.input, sources: [] } }], refused: [] };
   } }), /did not retain/);
 });
 
@@ -117,7 +117,7 @@ for (const variant of ['material', 'author', 'triggering actor', 'scope', 'inter
     let opens = 0;
     const receipt = await receivePreparedGitHubWork({ prepared: next, call: async (verb, args) => {
       if (verb === 'work-open') { opens++; return { id: admitted.id }; }
-      return args.source ? { position: 'one', threads: [prior], refused: 0, matched: 1 } : { threads: [admitted] };
+      return args.source ? { position: 'one', threads: [prior], refused: 0, matched: 1 } : { threads: [admitted], refused: [] };
     } });
     assert.equal(opens, 1);
     assert.equal(receipt.replay, false);
@@ -146,7 +146,7 @@ test('native replay still requires exact readback of the original retained carri
   const substituted = stored(next);
   await assert.rejects(receivePreparedGitHubWork({ prepared: next, call: async (verb, args) => {
     assert.equal(verb, 'work-board');
-    return args.source ? { position: 'one', threads: [prior], refused: 0, matched: 1 } : { threads: [substituted] };
+    return args.source ? { position: 'one', threads: [prior], refused: 0, matched: 1 } : { threads: [substituted], refused: [] };
   } }), /did not retain the exact source document/);
 });
 
@@ -258,7 +258,7 @@ test('removing an authored source requirement or tag is a new interpretation, no
         if (verb === 'work-open') { opens++; return { id: newThread.id }; }
         return args.source
           ? { position: 'source-position', refused: 0, matched: 1, threads: [stored(initial)] }
-          : { threads: [newThread] };
+          : { threads: [newThread], refused: [] };
       },
     });
     assert.equal(opens, 1, 'removed terms must not inherit older native Work identity');
